@@ -1,0 +1,35 @@
+# ── Büyük veri dosyaları (yeniden üretilebilir) ──────────────────────────────
+data/raw/
+data/processed/
+data/api_cache/
+data/live/
+data/predictions/
+data/cache/
+
+# ── Model dosyaları (yeniden eğitilebilir) ────────────────────────────────────
+models/
+
+# ── Raporlar (yeniden üretilebilir) ───────────────────────────────────────────
+reports/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# ── Electron / Node ───────────────────────────────────────────────────────────
+electron-app/node_modules/
+electron-app/out/
+electron-app/dist/
+
+# ── Genel ─────────────────────────────────────────────────────────────────────
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

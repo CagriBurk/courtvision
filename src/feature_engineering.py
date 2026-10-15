@@ -1,11 +1,11 @@
 """
 feature_engineering.py
 -----------------------
-Hem 02_build_features.py (offline eğitim) hem de api_server.py (live tahmin)
-tarafından import edilen paylaşımlı modül.
+Both 02_build_features.py (offline training) and api_server.py (live prediction)
+import shared module.
 
-Tüm fonksiyonlar shift(1) kuralına uyar: hiçbir feature mevcut maçın
-istatistiklerini içermez — sadece geçmiş maçların verileri.
+All functions follow shift(1) rule: no feature uses current match
+stats — only past match data.
 """
 
 from collections import defaultdict
@@ -15,12 +15,12 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
-# 1. Team Game Log (Wide → Tall dönüşümü)
+# 1. Team Game Log (Wide -> Tall conversion)
 # ---------------------------------------------------------------------------
 def build_team_game_log(master: pd.DataFrame) -> pd.DataFrame:
     """
-    Her maçı iki satıra ayırır: ev sahibi perspektifi + deplasman perspektifi.
-    Çıktı sütunları her iki takım için de tutarlıdır.
+    Splits each game into two rows: home perspective + away perspective.
+    Output columns are consistent for both teams.
     """
     stat_map = {
         "pts":        ("pts_home",        "pts_away"),

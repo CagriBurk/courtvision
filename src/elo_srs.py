@@ -1,24 +1,24 @@
 """
 elo_srs.py
 ----------
-Elo rating and SRS (Simple Rating System) calculation module.
-02_build_features.py ve 05_predict_today.py imported by.
+Elo rating ve SRS (Simple Rating System) hesaplama modülü.
+02_build_features.py ve 05_predict_today.py tarafından import edilir.
 
-Functions:
-  compute_elo(master)              → game_id based pre-game Elo values
-  compute_opponent_quality(tlog)   → opponent quality rolling features
-  compute_srs(tlog)                → rolling SRS prediction
+Fonksiyonlar:
+  compute_elo(master)              → game_id bazlı pre-game Elo değerleri
+  compute_opponent_quality(tlog)   → rakip kalitesi rolling feature'ları
+  compute_srs(tlog)                → rolling SRS tahmini
 """
 
 import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Elo constants
+# Elo sabitleri
 # ---------------------------------------------------------------------------
-ELO_INIT       = 1500.0   # new team starting Elo
-ELO_K          = 20.0     # update speed (standard for NBA)
-ELO_REGRESSION = 0.75     # start of season: new_elo = 0.75*eski + 0.25*1500
+ELO_INIT       = 1500.0   # yeni takım başlangıç Elo'su
+ELO_K          = 20.0     # güncelleme hızı (NBA için standart)
+ELO_REGRESSION = 0.75     # sezon başı: yeni_elo = 0.75*eski + 0.25*1500
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ ELO_REGRESSION = 0.75     # start of season: new_elo = 0.75*eski + 0.25*1500
 # ---------------------------------------------------------------------------
 def compute_elo(master: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculates pre-game Elo from all historical matches.
+    Tüm tarihsel maçlardan pre-game Elo hesaplar.
 
     Parametreler:
         master: game_id, game_date, season_id, team_id_home, team_id_away, target içeren DataFrame

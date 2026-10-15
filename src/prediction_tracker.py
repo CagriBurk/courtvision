@@ -1,14 +1,15 @@
 """
 prediction_tracker.py
 ----------------------
-Saves daily predictions and calculates accuracy after match results are announced.
+Günlük tahminleri kaydeder ve maç sonuçları açıklandıktan sonra
+doğruluğu hesaplar.
 
-Functions:
-  save_predictions(predictions)   → append to predictions_log.parquet
-  fill_results(master)            → fill actual_winner and correct
-  get_stats()                     → weighted accuracy and tier based statistics
+Fonksiyonlar:
+  save_predictions(predictions)   → predictions_log.parquet'e ekle
+  fill_results(master)            → actual_winner ve correct doldur
+  get_stats()                     → ağırlıklı accuracy ve tier bazlı istatistikler
 
-Prediction log: data/predictions/predictions_log.parquet
+Tahmin kaydı: data/predictions/predictions_log.parquet
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ CONFIDENCE_WEIGHTS = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 def save_predictions(predictions: list[dict]) -> pd.DataFrame:
     """
     05_predict_today.py'nin ürettiği predictions listesini alır,
-    append to predictions_log.parquetr.
+    predictions_log.parquet'e ekler.
 
     Her kayıt:
       game_id, date, home_team, home_team_id, away_team, away_team_id,
@@ -135,7 +136,7 @@ def fill_results(master: pd.DataFrame | None = None) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def get_stats() -> dict:
     """
-    Tüm kayıtlardan weighted accuracy and tier based statistics döner.
+    Tüm kayıtlardan ağırlıklı accuracy ve tier bazlı istatistikler döner.
 
     Döner:
       total, correct, raw_accuracy,

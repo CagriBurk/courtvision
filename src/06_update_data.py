@@ -1,15 +1,15 @@
 """
 06_update_data.py
 -----------------
-Kaggle dataset ends ~June 2023. This script;
-  - Fetches missing seasons using nba_api LeagueGameLog endpoint
-  - Converts to Wide format (home+away on same row, game.csv format)
-  - Saves as parquet under data/api_cache/
+Kaggle dataset ~Haziran 2023'te bitiyor. Bu script;
+  - nba_api'nin LeagueGameLog endpoint'i ile eksik sezonları çeker
+  - Wide formata (home+away aynı satırda, game.csv formatı) dönüştürür
+  - data/api_cache/ altına parquet olarak kaydeder
 
-Usage:
+Kullanım:
     python src/06_update_data.py
     python src/06_update_data.py --seasons 2023-24 2024-25 2025-26
-    python src/06_update_data.py --seasons 2025-26  # update only current season
+    python src/06_update_data.py --seasons 2025-26  # sadece mevcut sezon güncelle
 """
 
 import argparse
@@ -25,24 +25,24 @@ try:
     NBA_API_AVAILABLE = True
 except ImportError:
     NBA_API_AVAILABLE = False
-    print("[WARNING] nba_api not installed. First: pip install nba_api")
+    print("[UYARI] nba_api yüklü değil. Önce: pip install nba_api")
 
 # ---------------------------------------------------------------------------
-# Constants
+# Sabitler
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent
 CACHE_DIR = ROOT / "data" / "api_cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Default missing seasons (Kaggle dataset comes up to ~2022-23 end)
+# Varsayılan eksik sezonlar (Kaggle dataset ~2022-23 bitişine kadar geliyor)
 DEFAULT_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
-# nba_api rate limit: ~600ms wait is enough
+# nba_api rate limit: ~600ms bekleme yeterli
 SLEEP_SEC = 0.7
 
 
 # ---------------------------------------------------------------------------
-# Helper: Valid NBA team IDs (30 teams)
+# Yardımcı: Geçerli NBA takım ID'leri (30 takım)
 # ---------------------------------------------------------------------------
 def get_valid_team_ids() -> set:
     teams = nba_teams_static.get_teams()
@@ -50,19 +50,19 @@ def get_valid_team_ids() -> set:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Fetch LeagueGameLog
+# Adım 1: LeagueGameLog çek
 # ---------------------------------------------------------------------------
 def fetch_season_raw(season_str: str, season_type: str = "Regular Season") -> pd.DataFrame:
     """
-    Fetches specified season from nba_api.
-    Returned DataFrame is in tall format (2 rows per game: home + away).
+    Belirtilen sezonu nba_api'den çeker.
+    Dönen DataFrame tall formattadır (her maç için 2 satır: ev + deplasman).
 
-    Columns: SEASON_ID, TEAM_ID, TEAM_ABBREVIATION, TEAM_NAME, GAME_ID,
+    Sütunlar: SEASON_ID, TEAM_ID, TEAM_ABBREVIATION, TEAM_NAME, GAME_ID,
               GAME_DATE, MATCHUP, WL, PTS, FGM, FGA, FG_PCT, FG3M, FG3A,
               FG3_PCT, FTM, FTA, FT_PCT, OREB, DREB, REB, AST, STL, BLK,
               TOV, PF, PLUS_MINUS
     """
-    print(f"  Fetching: {season_str} ({season_type})...", end=" ", flush=True)
+    print(f"  Çekiliyor: {season_str} ({season_type})...", end=" ", flush=True)
     try:
         gl = leaguegamelog.LeagueGameLog(
             season=season_str,
@@ -72,22 +72,22 @@ def fetch_season_raw(season_str: str, season_type: str = "Regular Season") -> pd
         )
         time.sleep(SLEEP_SEC)
         df = gl.get_data_frames()[0]
-        print(f"{len(df)} rows")
+        print(f"{len(df)} satır")
         return df
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"HATA: {e}")
         return pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Tall -> Wide conversion (similar to game.csv format)
+# Adım 2: Tall → Wide dönüşümü (game.csv formatına benzer)
 # ---------------------------------------------------------------------------
 def convert_to_wide(df: pd.DataFrame, valid_team_ids: set) -> pd.DataFrame:
     """
-    Converts LeagueGameLog tall format to wide:
-    Her maç için 1 rows, home ve away sütunları yan yana.
+    LeagueGameLog'un tall formatını wide'a çevirir:
+    Her maç için 1 satır, home ve away sütunları yan yana.
 
-    Output columns are lowercased to match game.csv.
+    Çıktı sütunları game.csv ile uyumlu olacak şekilde küçük harfe çevrilir.
     """
     if df.empty:
         return pd.DataFrame()
@@ -96,7 +96,7 @@ def convert_to_wide(df: pd.DataFrame, valid_team_ids: set) -> pd.DataFrame:
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
     df["is_home"] = df["MATCHUP"].apply(lambda m: 1 if "vs." in m else 0)
 
-    # Filter to valid NBA teams (exclude All-Star, international games, etc.)
+    # Geçerli NBA takımlarına filtrele (All-Star, uluslararası maçlar vb. çıkar)
     df = df[df["TEAM_ID"].astype(str).isin(valid_team_ids)]
 
     home = df[df["is_home"] == 1].copy()
@@ -197,7 +197,7 @@ def get_season(season_str: str, force_refresh: bool = False) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Main flow
+# Ana akış
 # ---------------------------------------------------------------------------
 def main(seasons: list[str], force_refresh: bool = False):
     if not NBA_API_AVAILABLE:
@@ -221,7 +221,7 @@ def main(seasons: list[str], force_refresh: bool = False):
         combined.to_parquet(summary_path, index=False)
 
         print(f"\n{'='*60}")
-        print(f"SUMMARY")
+        print(f"ÖZET")
         print(f"  Toplam maç: {len(combined)}")
         print(f"  Tarih aralığı: {combined['game_date'].min().date()} → {combined['game_date'].max().date()}")
         print(f"  Birleşik dosya: {summary_path}")

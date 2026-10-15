@@ -182,7 +182,7 @@ def predict_games(games: list[dict], model, feature_columns: list, current_elo: 
         game_feats.update(h2h_feats)
         game_feats["is_playoff"] = 0
 
-        # Elo feature'ları — get_current_elo(master)'dan gelen dayscel değerler
+        # Elo feature'ları — get_current_elo(master)'dan gelen güncel değerler
         h_elo = current_elo.get(str(h_id), 1500.0)
         a_elo = current_elo.get(str(a_id), 1500.0)
         e_home = 1.0 / (1.0 + 10.0 ** ((a_elo - h_elo) / 400.0))
@@ -436,7 +436,7 @@ def main(target_date: date | None = None):
         p["date"] = str(target_date)
     save_predictions(predictions)
 
-    # Önceki dayslerin sonuçlarını doldur (master tablodan)
+    # Önceki günlerin sonuçlarını doldur (master tablodan)
     fill_results(master)
 
     print(f"\n{'='*60}")
@@ -447,7 +447,7 @@ def main(target_date: date | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default=None,
-                        help="Prediction date (YYYY-MM-DD), varsayılan: budays")
+                        help="Tahmin tarihi (YYYY-MM-DD), varsayılan: bugün")
     args = parser.parse_args()
 
     target = date.fromisoformat(args.date) if args.date else None

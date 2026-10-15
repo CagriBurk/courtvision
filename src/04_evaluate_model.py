@@ -1,20 +1,20 @@
 """
 04_evaluate_model.py
 --------------------
-Measures model performance with walk-forward (out-of-fold) evaluation.
-Reruns 5-fold with best parameters, collecting validation data for each fold.
+Walk-forward (out-of-fold) değerlendirme ile model performansını ölçer.
+En iyi parametrelerle 5-fold yeniden çalıştırılır, her fold validation verisi toplanır.
 
-Input :
+Girdi :
   data/processed/features.parquet
   models/xgb_best.pkl
   models/optuna_study.pkl
   models/feature_columns.pkl
 
-Output :
-  reports/evaluation_report.html  (interactive HTML report)
-  Console: fold-by-fold and total metrics
+Çıktı :
+  reports/evaluation_report.html  (interaktif HTML raporu)
+  Konsol: fold-by-fold ve toplam metrikler
 
-Usage:
+Kullanım:
     python src/04_evaluate_model.py
 """
 

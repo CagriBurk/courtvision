@@ -1,17 +1,17 @@
 """
 03_train_model.py
 -----------------
-Trains XGBoost model with Optuna + TimeSeriesSplit.
+XGBoost modelini Optuna + TimeSeriesSplit ile eğitir.
 
-Input : data/processed/features.parquet
-Output :
-  models/xgb_best.pkl          (trained model)
-  models/optuna_study.pkl      (Optuna study, for inspection)
-  models/feature_columns.pkl   (feature order, critical for inference)
+Girdi : data/processed/features.parquet
+Çıktı :
+  models/xgb_best.pkl          (eğitilmiş model)
+  models/optuna_study.pkl      (Optuna study, inceleme için)
+  models/feature_columns.pkl   (feature sırası, inference için kritik)
 
-Usage:
+Kullanım:
     python src/03_train_model.py
-    python src/03_train_model.py --trials 50   # for fast testing
+    python src/03_train_model.py --trials 50   # hızlı test için
 """
 
 import argparse
@@ -35,7 +35,7 @@ PROC_DIR   = ROOT / "data" / "processed"
 MODELS_DIR = ROOT / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Meta columns not used for modeling
+# Model için kullanılmayacak meta sütunlar
 META_COLS = [
     "game_id", "game_date", "season_id", "season_type",
     "team_id_home", "team_abbreviation_home", "team_name_home",
@@ -45,7 +45,7 @@ META_COLS = [
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Veri yükleme
 # ---------------------------------------------------------------------------
 def load_features() -> tuple[pd.DataFrame, pd.Series, list[str]]:
     print("[1/4] Features yükleniyor...")
@@ -113,7 +113,7 @@ def make_objective(X: pd.DataFrame, y: pd.Series, tscv: TimeSeriesSplit):
 
 
 # ---------------------------------------------------------------------------
-# Main flow
+# Ana akış
 # ---------------------------------------------------------------------------
 def main(n_trials: int = 150):
     print(f"\n{'='*60}")
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--trials", type=int, default=150,
-        help="Optuna trial sayısı (varsayılan: 150, for fast testing: 20-30)"
+        help="Optuna trial sayısı (varsayılan: 150, hızlı test için: 20-30)"
     )
     args = parser.parse_args()
     main(n_trials=args.trials)

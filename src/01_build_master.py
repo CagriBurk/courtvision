@@ -1,16 +1,16 @@
 """
 01_build_master.py
 ------------------
-Kaggle CSV'leri + nba_api önbelleğini birleştirerek tek bir
-master_games.parquet dosyası üretir.
+Merges Kaggle CSVs + nba_api cache into a single
+master_games.parquet file.
 
-Çıktı: data/processed/master_games.parquet
-  - Bir satır = bir Regular Season maçı
-  - ~2000–bugün arası tüm sezonlar
-  - home + away sütunları yan yana (wide format)
-  - target: 1 = ev sahibi kazandı, 0 = deplasman kazandı
+Output: data/processed/master_games.parquet
+  - One row = one Regular Season game
+  - ~2000–bugün all seasons between
+  - home + away columns side by side (wide format)
+  - target: 1 = home team won, 0 = away team won
 
-Kullanım:
+Usage:
     python src/01_build_master.py
 """
 
@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Dizin sabitleri
+# Directory constants
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent
 RAW_DIR = ROOT / "data" / "raw"
@@ -30,19 +30,19 @@ PROC_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# 1. Kaggle game.csv yükle ve filtrele
+# 1. Load and filter Kaggle game.csv
 # ---------------------------------------------------------------------------
 def load_kaggle_games() -> pd.DataFrame:
-    print("[1/5] Kaggle game.csv yükleniyor...")
+    print("[1/5] Loading Kaggle game.csv...")
     game = pd.read_csv(RAW_DIR / "game.csv", parse_dates=["game_date"])
 
-    # Tarih filtresi: 2000+ modern dönem
+    # Date filter: 2000+ modern era
     game = game[game["game_date"] >= "2000-01-01"]
 
-    # Season type: sadece Regular Season
+    # Season type: Regular Season only
     game = game[game["season_type"] == "Regular Season"]
 
-    # Geçerli NBA takım ID'leri (team.csv referans)
+    # Valid NBA team IDs (team.csv referans)
     team = pd.read_csv(RAW_DIR / "team.csv")
     valid_ids = set(team["id"].astype(str))
     game = game[
@@ -50,13 +50,13 @@ def load_kaggle_games() -> pd.DataFrame:
         & game["team_id_away"].astype(str).isin(valid_ids)
     ]
 
-    # Hedef değişken eksikse çıkar (çok nadir)
+    # Drop if target variable is missing (very rare)
     game = game.dropna(subset=["wl_home"])
 
-    # Binary hedef
+    # Binary target
     game["target"] = (game["wl_home"] == "W").astype(int)
 
-    # Sütun temizliği: sadece ihtiyaç duyduklarımız
+    # Column cleanup: only what we need
     keep_cols = [
         "game_id", "game_date", "season_id", "season_type",
         "team_id_home", "team_abbreviation_home", "team_name_home",
@@ -78,26 +78,26 @@ def load_kaggle_games() -> pd.DataFrame:
         # Hedef
         "target",
     ]
-    # Sadece mevcut sütunları al (bazı sütunlar CSV versiyonuna göre değişebilir)
+    # Only take existing columns (some columns may vary by CSV version)
     keep_cols = [c for c in keep_cols if c in game.columns]
     game = game[keep_cols].copy()
 
     game = game.sort_values("game_date").reset_index(drop=True)
-    print(f"  → {len(game)} maç ({game['game_date'].min().date()} – {game['game_date'].max().date()})")
+    print(f"  → {len(game)} games ({game['game_date'].min().date()} – {game['game_date'].max().date()})")
     return game
 
 
 # ---------------------------------------------------------------------------
-# 2. nba_api önbelleğini yükle (api_cache/all_api_seasons.parquet)
+# 2. Load nba_api cache (api_cache/all_api_seasons.parquet)
 # ---------------------------------------------------------------------------
 def load_api_cache() -> pd.DataFrame:
     combined_path = CACHE_DIR / "all_api_seasons.parquet"
 
     if not combined_path.exists():
-        # Tek tek parquet dosyalarını dene
+        # Try individual parquet files
         individual = sorted(CACHE_DIR.glob("season_*.parquet"))
         if not individual:
-            print("[2/5] API önbelleği bulunamadı. Önce 06_update_data.py çalıştırın.")
+            print("[2/5] API cache not found. Run 06_update_data.py first.")
             return pd.DataFrame()
 
         frames = [pd.read_parquet(p) for p in individual]
@@ -105,12 +105,12 @@ def load_api_cache() -> pd.DataFrame:
     else:
         api_df = pd.read_parquet(combined_path)
 
-    print(f"[2/5] API önbelleği yüklendi: {len(api_df)} maç")
+    print(f"[2/5] API cache loaded: {len(api_df)} games")
 
-    # game_date sütununun datetime olduğundan emin ol
+    # ensure game_date column is datetime
     api_df["game_date"] = pd.to_datetime(api_df["game_date"])
 
-    # API verisindeki sütun adlarını Kaggle formatına hizala
+    # Align API data column names to Kaggle format
     col_map = {
         "team_id_home": "team_id_home",
         "team_abbreviation_home": "team_abbreviation_home",
@@ -118,42 +118,42 @@ def load_api_cache() -> pd.DataFrame:
         "team_id_away": "team_id_away",
         "team_abbreviation_away": "team_abbreviation_away",
         "team_name_away": "team_name_away",
-        # API küçük harf, Kaggle de küçük harf — tutarlı
+        # API lowercase, Kaggle also lowercase — consistent
     }
-    # pts_home / pts_away Kaggle'da var, API'de de var
+    # pts_home / pts_away Exists in Kaggle, exists in API too
     if "pts_home" not in api_df.columns and "pts_home" in api_df.columns:
-        pass  # zaten doğru
+        pass  # already correct
 
     return api_df
 
 
 # ---------------------------------------------------------------------------
-# 3. İki kaynağı birleştir, çakışmaları gider
+# 3. Merge two sources, resolve conflicts
 # ---------------------------------------------------------------------------
 def merge_sources(kaggle_df: pd.DataFrame, api_df: pd.DataFrame) -> pd.DataFrame:
-    print("[3/5] Kaynaklar birleştiriliyor...")
+    print("[3/5] Merging sources...")
 
     if api_df.empty:
-        print("  → Sadece Kaggle verisi kullanılıyor.")
+        print("  → Only Kaggle data is used.")
         return kaggle_df
 
-    # API verisindeki maçlardan Kaggle'da olmayanları al
+    # API verisindeki gameslardan Kaggle'da olmayanları al
     if "game_id" in api_df.columns and "game_id" in kaggle_df.columns:
         existing_ids = set(kaggle_df["game_id"].astype(str))
         new_games = api_df[~api_df["game_id"].astype(str).isin(existing_ids)].copy()
     else:
-        # game_id yoksa tarih bazlı kesi kesişim analizi
+        # if no game_id, date-based intersection analysis
         kaggle_last = kaggle_df["game_date"].max()
         new_games = api_df[api_df["game_date"] > kaggle_last].copy()
 
-    print(f"  → Kaggle: {len(kaggle_df)} maç")
-    print(f"  → API (yeni): {len(new_games)} maç")
+    print(f"  → Kaggle: {len(kaggle_df)} games")
+    print(f"  → API (new): {len(new_games)} games")
 
-    # game_id'yi her iki kaynakta da string'e zorla (mixed type → pyarrow hatası)
+    # force game_id to string in both sources (mixed type → pyarrow hatası)
     kaggle_df["game_id"] = kaggle_df["game_id"].astype(str)
     new_games["game_id"] = new_games["game_id"].astype(str)
 
-    # Ortak sütunları bul, eksik olanları NaN ekle
+    # Find common columns, add NaN for missing ones
     all_cols = list(dict.fromkeys(list(kaggle_df.columns) + list(new_games.columns)))
 
     for col in all_cols:
@@ -165,15 +165,15 @@ def merge_sources(kaggle_df: pd.DataFrame, api_df: pd.DataFrame) -> pd.DataFrame
     combined = pd.concat([kaggle_df[all_cols], new_games[all_cols]], ignore_index=True)
     combined = combined.sort_values("game_date").reset_index(drop=True)
 
-    print(f"  → Birleşik toplam: {len(combined)} maç")
+    print(f"  → Combined total: {len(combined)} games")
     return combined
 
 
 # ---------------------------------------------------------------------------
-# 4. other_stats.csv merge
+# 4. merge other_stats.csv
 # ---------------------------------------------------------------------------
 def merge_other_stats(master: pd.DataFrame) -> pd.DataFrame:
-    print("[4/5] other_stats.csv birleştiriliyor (LEFT JOIN)...")
+    print("[4/5] other_stats.csv merging (LEFT JOIN)...")
     other = pd.read_csv(RAW_DIR / "other_stats.csv")
 
     keep = [
@@ -189,10 +189,10 @@ def merge_other_stats(master: pd.DataFrame) -> pd.DataFrame:
     ]
     keep = [c for c in keep if c in other.columns]
     other = other[keep].copy()
-    other["game_id"] = other["game_id"].astype(str)  # tip tutarlılığı
+    other["game_id"] = other["game_id"].astype(str)  # type consistency
 
-    # Birleştirilmiş tabloda bu sütunlar zaten NaN olarak varsa kaldır
-    # (API verisi için boş bırakıldılar), other_stats'tan doldur
+    # Drop these columns from combined table if they already exist as NaN
+    # (they were left empty for API data), fill from other_stats
     existing_other_cols = [c for c in keep if c != "game_id" and c in master.columns]
     master_no_other = master.drop(columns=existing_other_cols, errors="ignore")
 
@@ -200,15 +200,15 @@ def merge_other_stats(master: pd.DataFrame) -> pd.DataFrame:
 
     coverage = other["game_id"].nunique()
     total = master["game_id"].nunique()
-    print(f"  → other_stats kapsama: {coverage}/{total} maç ({100*coverage/total:.1f}%)")
+    print(f"  → other_stats coverage: {coverage}/{total} games ({100*coverage/total:.1f}%)")
     return master_merged
 
 
 # ---------------------------------------------------------------------------
-# 5. line_score.csv merge (periyot skorları)
+# 5. line_score.csv merge (period scores)
 # ---------------------------------------------------------------------------
 def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
-    print("[5/5] line_score.csv birleştiriliyor (LEFT JOIN)...")
+    print("[5/5] line_score.csv merging (LEFT JOIN)...")
     ls = pd.read_csv(RAW_DIR / "line_score.csv")
 
     keep = [
@@ -220,15 +220,15 @@ def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
     ]
     keep = [c for c in keep if c in ls.columns]
     ls = ls[keep].drop_duplicates(subset=["game_id"]).copy()
-    ls["game_id"] = ls["game_id"].astype(str)  # tip tutarlılığı
+    ls["game_id"] = ls["game_id"].astype(str)  # type consistency
 
-    # Mevcut line_score sütunlarını düşür (API verisi boş bıraktı)
+    # Drop existing line_score columns (API data left empty)
     existing_ls_cols = [c for c in keep if c != "game_id" and c in master.columns]
     master_no_ls = master.drop(columns=existing_ls_cols, errors="ignore")
 
     master_merged = master_no_ls.merge(ls, on="game_id", how="left")
 
-    # OT ve çeyrek fark türetmeleri
+    # OT and quarter difference derivations
     master_merged["went_to_ot"] = (
         master_merged.get("pts_ot1_home", pd.Series(dtype=float)).fillna(0) > 0
     ).astype(float)
@@ -245,16 +245,16 @@ def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
 
     coverage = ls["game_id"].nunique()
     total = master["game_id"].nunique()
-    print(f"  → line_score kapsama: {coverage}/{total} maç ({100*coverage/total:.1f}%)")
+    print(f"  → line_score coverage: {coverage}/{total} games ({100*coverage/total:.1f}%)")
     return master_merged
 
 
 # ---------------------------------------------------------------------------
-# Ana akış
+# Main flow
 # ---------------------------------------------------------------------------
 def main():
     print(f"\n{'='*60}")
-    print("NBA Master Tablo Oluşturuluyor")
+    print("Building NBA Master Table")
     print(f"{'='*60}\n")
 
     kaggle = load_kaggle_games()
@@ -263,14 +263,14 @@ def main():
     master = merge_other_stats(master)
     master = merge_line_score(master)
 
-    # Son kontrol
+    # Final check
     master = master.sort_values("game_date").reset_index(drop=True)
     master["game_date"] = pd.to_datetime(master["game_date"])
 
-    # Tip tutarlılığı — pyarrow mixed-type sütunlarda patlar
-    # game_id: her zaman string (Kaggle'da '0022300061', API'de int olabilir)
+    # Type consistency - pyarrow crashes on mixed-type columns
+    # game_id: always string (Kaggle'da '0022300061', API'de int can be)
     master["game_id"] = master["game_id"].astype(str)
-    # team_id'ler: string'e normalize et
+    # team_id'ler: string'e normalize
     for col in ["team_id_home", "team_id_away"]:
         if col in master.columns:
             master[col] = master[col].astype(str)
@@ -282,19 +282,19 @@ def main():
     master.to_parquet(out_path, index=False)
 
     print(f"\n{'='*60}")
-    print("ÖZET")
-    print(f"  Toplam maç     : {len(master)}")
-    print(f"  Tarih aralığı  : {master['game_date'].min().date()} → {master['game_date'].max().date()}")
-    print(f"  Ev sahibi W oranı: {master['target'].mean():.3f}")
-    print(f"  Toplam sütun   : {master.shape[1]}")
-    print(f"  Kayıt          : {out_path}")
+    print("SUMMARY")
+    print(f"  Toplam games     : {len(master)}")
+    print(f"  Date range  : {master['game_date'].min().date()} → {master['game_date'].max().date()}")
+    print(f"  Home W ratio: {master['target'].mean():.3f}")
+    print(f"  Total columns   : {master.shape[1]}")
+    print(f"  Save path          : {out_path}")
     print(f"{'='*60}\n")
 
-    # Basit veri kalitesi raporu
+    # Simple data quality report
     null_pcts = (master.isnull().sum() / len(master) * 100).sort_values(ascending=False)
     null_pcts = null_pcts[null_pcts > 0]
     if not null_pcts.empty:
-        print("Eksik veri oranları (> 0%):")
+        print("Missing data ratios (> 0%):")
         print(null_pcts.to_string())
         print()
 

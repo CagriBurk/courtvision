@@ -1,17 +1,17 @@
 """
 05_predict_today.py
 -------------------
-Bugünün NBA maçlarını nba_api'den otomatik çeker,
-rolling feature'ları hesaplar ve tahmin üretir.
+Automatically fetches today's NBA games from nba_api,
+calculates rolling features and generates predictions.
 
-Çıktı:
+Output:
   data/live/today_schedule.json
   data/live/live_features.parquet
   reports/predictions_YYYY-MM-DD.html
 
-Kullanım:
+Usage:
     python src/05_predict_today.py
-    python src/05_predict_today.py --date 2026-02-22  # belirli bir gün
+    python src/05_predict_today.py --date 2026-02-22  # specific day
 """
 
 import argparse
@@ -25,11 +25,11 @@ import numpy as np
 import pandas as pd
 
 try:
-    from nba_api.stats.endpoints import scoreboardv3, teamgamelog
-    from nba_api.stats.static import teams as nba_teams_static
+    from nba_api.stats.endpoints import teamgamelog
     NBA_API_AVAILABLE = True
 except ImportError:
     NBA_API_AVAILABLE = False
+from nba_data_client import fetch_today_schedule
 
 from feature_engineering import compute_live_team_features
 from elo_srs import get_current_elo
@@ -46,75 +46,15 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 SLEEP_SEC       = 0.7
 CURRENT_SEASON  = "2025-26"
-MIN_GAMES_NEEDED = 5  # daha az maç varsa önceki sezonu ekle
+MIN_GAMES_NEEDED = 5  # if fewer games, add previous season
 
 
 # ---------------------------------------------------------------------------
-# 1. Bugünkü maç programını çek
-# ---------------------------------------------------------------------------
-def fetch_today_schedule(target_date: date) -> list[dict]:
-    date_str = target_date.strftime("%m/%d/%Y")
-    print(f"  Maç programı çekiliyor: {date_str}...")
-
-    sb = scoreboardv3.ScoreboardV3(game_date=date_str, league_id="00")
-    time.sleep(SLEEP_SEC)
-
-    dfs     = sb.get_data_frames()
-    game_df = dfs[1]   # gameId, gameStatus, gameCode, gameStatusText ...
-    team_df = dfs[2]   # gameId, teamId, teamTricode ... (home+away aynı tabloda)
-
-    # gameStatus: 1=başlamamış, 2=devam ediyor, 3=bitti
-    upcoming = game_df[game_df["gameStatus"] == 1]
-
-    games = []
-    seen_ids = set()
-    for _, row in upcoming.iterrows():
-        gid = str(row["gameId"])
-        if gid in seen_ids:
-            continue
-        seen_ids.add(gid)
-
-        # gameCode: '20260222/CLEOKC' → away=CLE, home=OKC (her zaman 3+3 karakter)
-        try:
-            code_part    = row["gameCode"].split("/")[1]
-            away_tricode = code_part[:3]
-            home_tricode = code_part[3:]
-        except Exception:
-            continue
-
-        game_teams = team_df[team_df["gameId"] == row["gameId"]]
-        home_row   = game_teams[game_teams["teamTricode"] == home_tricode]
-        away_row   = game_teams[game_teams["teamTricode"] == away_tricode]
-        if home_row.empty or away_row.empty:
-            continue
-
-        games.append({
-            "game_id":      gid,
-            "home_team_id": int(home_row.iloc[0]["teamId"]),
-            "away_team_id": int(away_row.iloc[0]["teamId"]),
-            "status":       str(row.get("gameStatusText", "")),
-        })
-
-    # Takım adlarını ekle
-    all_teams = {t["id"]: t for t in nba_teams_static.get_teams()}
-    for g in games:
-        h = all_teams.get(g["home_team_id"], {})
-        a = all_teams.get(g["away_team_id"], {})
-        g["home_team_name"] = h.get("full_name", str(g["home_team_id"]))
-        g["home_team_abbr"] = h.get("abbreviation", "???")
-        g["away_team_name"] = a.get("full_name", str(g["away_team_id"]))
-        g["away_team_abbr"] = a.get("abbreviation", "???")
-
-    print(f"  → {len(games)} maç bulundu")
-    return games
-
-
-# ---------------------------------------------------------------------------
-# 2. Takımın son maçlarını çek (mevcut sezon + gerekirse önceki sezon)
+# 2. Fetch team's recent games (current season + previous season if necessary)
 # ---------------------------------------------------------------------------
 def fetch_team_history(team_id: int) -> pd.DataFrame:
     """
-    Önce mevcut sezonu çek. Yeterli maç yoksa önceki sezondan
+    First fetch the current season. If not enough games, supplement from the previous season
     offline team_game_log.parquet'ten tamamla.
     """
     # Mevcut sezon
@@ -140,9 +80,9 @@ def fetch_team_history(team_id: int) -> pd.DataFrame:
         offline = pd.read_parquet(log_path)
         offline = offline[offline["team_id"] == str(team_id)].copy()
         if not offline.empty:
-            # Offline'dan son 20 maç → nba_api formatına çevir
+            # Last 20 games from offline → convert to nba_api format
             offline = offline.sort_values("game_date").tail(20)
-            # Basit dönüşüm: offline sütunları → API sütun adları
+            # Simple conversion: offline columns → API column names
             bridge = pd.DataFrame()
             bridge["GAME_DATE"]   = offline["game_date"].astype(str)
             bridge["WL"]          = offline["won"].map({1: "W", 0: "L"})
@@ -242,7 +182,7 @@ def predict_games(games: list[dict], model, feature_columns: list, current_elo: 
         game_feats.update(h2h_feats)
         game_feats["is_playoff"] = 0
 
-        # Elo feature'ları — get_current_elo(master)'dan gelen güncel değerler
+        # Elo feature'ları — get_current_elo(master)'dan gelen dayscel değerler
         h_elo = current_elo.get(str(h_id), 1500.0)
         a_elo = current_elo.get(str(a_id), 1500.0)
         e_home = 1.0 / (1.0 + 10.0 ** ((a_elo - h_elo) / 400.0))
@@ -371,16 +311,16 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
   <div class="details">
     <div class="detail-col">
       <b>{p['home_team_name']}{home_b2b_badge}</b><br>
-      Son 5 maç: {home_form_pct} | Seri: {_streak_str(p['home_streak'])} | Dinlenme: {p['home_rest'] or '?'} gün
+      Last 5 games: {home_form_pct} | Streak: {_streak_str(p['home_streak'])} | Rest: {p['home_rest'] or '?'} days
     </div>
     <div class="detail-col">
       <b>{p['away_team_name']}{away_b2b_badge}</b><br>
-      Son 5 maç: {away_form_pct} | Seri: {_streak_str(p['away_streak'])} | Dinlenme: {p['away_rest'] or '?'} gün
+      Last 5 games: {away_form_pct} | Streak: {_streak_str(p['away_streak'])} | Rest: {p['away_rest'] or '?'} days
     </div>
   </div>
   <div class="h2h">
     H2H ({p['h2h_games']} maç): Ev sahibi win rate %{p['h2h_home_wr']:.1%} |
-    Ort. skor farkı: {p['h2h_pts_diff']:+.1f}
+    Avg score diff: {p['h2h_pts_diff']:+.1f}
   </div>
 </div>"""
 
@@ -441,7 +381,7 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ana akış
+# Main flow
 # ---------------------------------------------------------------------------
 def main(target_date: date | None = None):
     if not NBA_API_AVAILABLE:
@@ -460,10 +400,10 @@ def main(target_date: date | None = None):
     with open(MODELS_DIR / "feature_columns.pkl", "rb") as f:
         feature_columns = pickle.load(f)
     model.set_params(device="cpu")  # inference CPU'da, CUDA device mismatch uyarısını kapat
-    print(f"Model yüklendi. Feature sayısı: {len(feature_columns)}\n")
+    print(f"Model loaded. Feature count: {len(feature_columns)}\n")
 
     # Güncel Elo değerlerini hesapla
-    print("Elo rating hesaplanıyor (tüm tarihsel maçlardan)...")
+    print("Calculating Elo rating (from all historical games)...")
     master = pd.read_parquet(PROC_DIR / "master_games.parquet")
     master["game_date"] = pd.to_datetime(master["game_date"])
     current_elo = get_current_elo(master)
@@ -472,7 +412,7 @@ def main(target_date: date | None = None):
     # Maç programı
     games = fetch_today_schedule(target_date)
     if not games:
-        print("Bugün maç yok veya tüm maçlar tamamlandı.")
+        print("No games today or all games have finished.")
         return
 
     schedule_path = LIVE_DIR / "today_schedule.json"
@@ -496,7 +436,7 @@ def main(target_date: date | None = None):
         p["date"] = str(target_date)
     save_predictions(predictions)
 
-    # Önceki günlerin sonuçlarını doldur (master tablodan)
+    # Önceki dayslerin sonuçlarını doldur (master tablodan)
     fill_results(master)
 
     print(f"\n{'='*60}")
@@ -507,7 +447,7 @@ def main(target_date: date | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default=None,
-                        help="Tahmin tarihi (YYYY-MM-DD), varsayılan: bugün")
+                        help="Prediction date (YYYY-MM-DD), varsayılan: budays")
     args = parser.parse_args()
 
     target = date.fromisoformat(args.date) if args.date else None

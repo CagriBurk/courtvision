@@ -1,15 +1,15 @@
 """
 02_build_features.py
 --------------------
-Master tablodan rolling feature'ları hesaplar ve eğitime hazır
-feature matrisini üretir.
+Calculates rolling features from master table and produces
+a feature matrix ready for training.
 
-Girdi : data/processed/master_games.parquet
-Çıktı :
-  data/processed/team_game_log.parquet   (tall format, rolling feature'lar dahil)
-  data/processed/features.parquet        (game-level, model eğitimi için)
+Input : data/processed/master_games.parquet
+Output :
+  data/processed/team_game_log.parquet   (tall format, including rolling features)
+  data/processed/features.parquet        (game-level, for model training)
 
-Kullanım:
+Usage:
     python src/02_build_features.py
 """
 
@@ -41,7 +41,7 @@ def main():
     print(f"{'='*60}\n")
 
     # ---- 1. Master tabloyu yükle ----
-    print("[1/5] master_games.parquet yükleniyor...")
+    print("[1/5] loading master_games.parquet...")
     master = pd.read_parquet(PROC_DIR / "master_games.parquet")
     master["game_date"] = pd.to_datetime(master["game_date"])
     print(f"  → {len(master)} maç, {master.shape[1]} sütun")
@@ -53,10 +53,10 @@ def main():
     team_log_path = PROC_DIR / "team_game_log.parquet"
     team_log.to_parquet(team_log_path, index=False)
     print(f"  → {len(team_log)} satır ({team_log['team_id'].nunique()} takım)")
-    print(f"  → Kaydedildi: {team_log_path}")
+    print(f"  → Saved: {team_log_path}")
 
     # ---- 3. Rolling feature'ları hesapla ----
-    print("[3/6] Rolling feature'lar hesaplanıyor (groupby team)...")
+    print("[3/6] Calculating rolling features (groupby team)...")
     team_log_feats = compute_team_rolling_features(team_log)
     print(f"  → Rolling hesaplandı. Sütun sayısı: {team_log_feats.shape[1]}")
 
@@ -102,7 +102,7 @@ def main():
 
     # ---- Rapor ----
     print(f"\n{'='*60}")
-    print("ÖZET")
+    print("SUMMARY")
     print(f"  Feature matrix shape : {features.shape}")
     print(f"  Tarih aralığı        : {features['game_date'].min().date()} → {features['game_date'].max().date()}")
     print(f"  Ev sahibi win oranı  : {features['target'].mean():.3f}")

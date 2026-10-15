@@ -1,9 +1,9 @@
 """
 api_server.py
 -------------
-Electron uygulamasının bağlandığı FastAPI local REST sunucusu.
-Başlatma: uvicorn src.api_server:app --host 127.0.0.1 --port 8765
-veya doğrudan: python src/api_server.py
+Electron uygulamasının bağlandığı FastAPI local REST server.
+Start: uvicorn src.api_server:app --host 127.0.0.1 --port 8765
+or directly: python src/api_server.py
 """
 
 import json
@@ -19,14 +19,14 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-# src/ içindeyse parent'ı sys.path'e ekle
+# src/ if inside src, add parent to sys.path'e ekle
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
 from feature_engineering import compute_live_team_features
 
 # ---------------------------------------------------------------------------
-# Takım renk ve logo eşlemeleri
+# Team color and logo mappings
 # ---------------------------------------------------------------------------
 ESPN_ID: dict[str, str] = {
     'ATL': 'atl', 'BOS': 'bos', 'BKN': 'bkn', 'CHA': 'cha', 'CHI': 'chi',
@@ -94,7 +94,7 @@ def _load_model():
 
 
 def _run_predictions_if_stale() -> None:
-    """Bugünkü live_features.parquet yoksa veya dünden kalma ise tahminleri yeniden üret."""
+    """If live_features.parquet is missing or from yesterday, regenerate predictions."""
     live_path = LIVE_DIR / "live_features.parquet"
     try:
         fresh = (
@@ -107,10 +107,10 @@ def _run_predictions_if_stale() -> None:
         fresh = False
 
     if fresh:
-        print("[API] Bugünkü tahminler zaten güncel, atlanıyor.")
+        print("[API] Today predictions are already up to date, skipping.")
         return
 
-    print("[API] Tahminler eski/eksik — 05_predict_today.py çalıştırılıyor...")
+    print("[API] Predictions are old/missing — running 05_predict_today.py...")
     script = ROOT / "src" / "05_predict_today.py"
     result = subprocess.run(
         [sys.executable, str(script)],
@@ -118,24 +118,24 @@ def _run_predictions_if_stale() -> None:
         capture_output=False,
     )
     if result.returncode != 0:
-        print(f"[API] predict_today hata kodu: {result.returncode}")
+        print(f"[API] predict_today error code: {result.returncode}")
     else:
-        print("[API] Tahminler güncellendi.")
+        print("[API] Predictions updated.")
 
 
 @app.on_event("startup")
 async def startup_event():
     ok = _load_model()
     if ok:
-        print(f"[API] Model yüklendi. {len(_feature_columns)} feature.")
+        print(f"[API] Model loaded. {len(_feature_columns)} feature.")
     else:
-        print("[API] Model bulunamadı. Önce 03_train_model.py çalıştırın.")
+        print("[API] Model not found. Run 03_train_model.py first.")
 
-    # Tahminler güncel değilse otomatik üret
+    # Auto generate if predictions are not up to date
     try:
         _run_predictions_if_stale()
     except Exception as e:
-        print(f"[API] auto-predict atlandı: {e}")
+        print(f"[API] auto-predict skipped: {e}")
 
     # Önceki günlerin sonuçlarını otomatik doldur (yerel master_games.parquet'ten)
     try:
@@ -143,23 +143,23 @@ async def startup_event():
         filled = fill_results()
         if filled is not None and not filled.empty:
             completed = filled["correct"].notna().sum()
-            print(f"[API] fill_results: {completed} tamamlanmış tahmin.")
+            print(f"[API] fill_results: {completed} completed predictions.")
     except Exception as e:
-        print(f"[API] fill_results atlandı: {e}")
+        print(f"[API] fill_results skipped: {e}")
 
     # Canlı sezon sonuçlarını doldur (nba_api — 2024+ maçlar)
     try:
         from prediction_tracker import fill_results_live
         fill_results_live()
     except Exception as e:
-        print(f"[API] fill_results_live atlandı: {e}")
+        print(f"[API] fill_results_live skipped: {e}")
 
     # Sakatlık raporunu arka planda yenile (cache yoksa veya eskimişse)
     try:
         from player_stats import get_injuries
         get_injuries()   # cache varsa hızlı döner
     except Exception as e:
-        print(f"[API] injuries cache atlandı: {e}")
+        print(f"[API] injuries cache skipped: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ def _build_game_response(
     if not factors:
         prob = float(row.get('prob_home') or 0.5)
         factors.append({
-            'label': 'Model Tahmini',
+            'label': 'Model Prediction',
             'value': round(abs(prob - 0.5) * 20),
             'positive': prob > 0.5,
         })
@@ -348,11 +348,11 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# Endpoint: Bugünün tahminleri (frontend Game formatında)
+# Endpoint: Today predictions (frontend Game format)
 # ---------------------------------------------------------------------------
 @app.get("/api/today-games")
 async def today_games():
-    """Bugünün tahmin raporunu döndürür — frontend Game arayüzüne uygun."""
+    """Returns today prediction report — compatible with frontend Game interface."""
     live_path = LIVE_DIR / "live_features.parquet"
 
     if not live_path.exists():
@@ -360,7 +360,7 @@ async def today_games():
             "date":    str(date.today()),
             "games":   [],
             "count":   0,
-            "message": "Henüz tahmin çalıştırılmadı. 05_predict_today.py çalıştırın.",
+            "message": "Predictions not run yet. Run 05_predict_today.py.",
         }
 
     df = pd.read_parquet(live_path)
@@ -393,7 +393,7 @@ async def today_games():
             if players:
                 top_players[tid] = players
     except Exception as e:
-        print(f"[API] oyuncu/sakatlık yüklenemedi: {e}")
+        print(f"[API] failed to load player/injury: {e}")
 
     games = [
         _build_game_response(dict(row), log, injuries, top_players)
@@ -437,11 +437,11 @@ async def get_top_players(team_id: int, n: int = 5):
 
 
 # ---------------------------------------------------------------------------
-# Endpoint: Tahminleri yenile (05_predict_today'i çağırır)
+# Endpoint: Refresh predictions (calls 05_predict_today)
 # ---------------------------------------------------------------------------
 @app.post("/api/refresh-predictions")
 async def refresh_predictions():
-    """Tahminleri nba_api'den taze veri çekerek günceller."""
+    """Updates predictions by fetching fresh data from nba_api."""
     import subprocess
     script = ROOT / "src" / "05_predict_today.py"
     try:
@@ -451,7 +451,7 @@ async def refresh_predictions():
             cwd=str(ROOT),
         )
         if result.returncode == 0:
-            return {"success": True, "message": "Tahminler güncellendi."}
+            return {"success": True, "message": "Predictions updated."}
         else:
             return {"success": False, "error": result.stderr[-1000:]}
     except Exception as e:
@@ -459,11 +459,11 @@ async def refresh_predictions():
 
 
 # ---------------------------------------------------------------------------
-# Endpoint: Geçmiş tahminler (predictions_log.parquet)
+# Endpoint: Past predictions (predictions_log.parquet)
 # ---------------------------------------------------------------------------
 @app.get("/api/history")
 async def get_history():
-    """Kaydedilmiş tahmin geçmişini döndürür."""
+    """Returns saved prediction history."""
     pred_path = PRED_DIR / "predictions_log.parquet"
     if not pred_path.exists():
         return {"predictions": [], "stats": None}

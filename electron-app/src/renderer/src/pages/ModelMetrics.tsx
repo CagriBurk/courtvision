@@ -1,17 +1,17 @@
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  ResponsiveContainer,
-  Tooltip,
-  Cell,
-} from 'recharts'
-import { useEffect, useState } from 'react'
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts'
+import { useQuery } from '@tanstack/react-query'
 import { mockFeatureImportance, mockFoldMetrics } from '../data/historyData'
 
-interface FeatureItem { feature: string; importance: number }
-interface FoldItem    { fold: number; accuracy: number; auc: number; logLoss: number }
+interface FeatureItem {
+  feature: string
+  importance: number
+}
+interface FoldItem {
+  fold: number
+  accuracy: number
+  auc: number
+  logLoss: number
+}
 
 interface ModelMetricsProps {
   apiBase?: string
@@ -19,40 +19,46 @@ interface ModelMetricsProps {
 
 // Gerçek değerler — 04_evaluate_model.py, 236 feature, 2026-02-22
 const DEFAULT_METRICS = [
-  { label: 'Accuracy (OOF)', value: '66.7%', sub: 'Baseline: 57.9% (+8.8pp)', color: 'text-emerald-400' },
-  { label: 'AUC-ROC',        value: '0.715', sub: 'İyi ayrım gücü',           color: 'text-blue-400'    },
-  { label: 'Log-Loss',       value: '0.608', sub: 'Baseline: 0.679',           color: 'text-amber-400'   },
-  { label: 'Brier Score',    value: '0.210', sub: 'Kalibrasyon kalitesi',      color: 'text-purple-400'  },
+  {
+    label: 'Accuracy (OOF)',
+    value: '66.7%',
+    sub: 'Baseline: 57.9% (+8.8pp)',
+    color: 'text-emerald-400'
+  },
+  { label: 'AUC-ROC', value: '0.715', sub: 'İyi ayrım gücü', color: 'text-blue-400' },
+  { label: 'Log-Loss', value: '0.608', sub: 'Baseline: 0.679', color: 'text-amber-400' },
+  { label: 'Brier Score', value: '0.210', sub: 'Kalibrasyon kalitesi', color: 'text-purple-400' }
 ]
 
 const IMPORTANCE_COLORS = [
-  '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#c084fc',
-  '#e879f9', '#f472b6', '#fb7185', '#f87171', '#fca5a5',
+  '#3b82f6',
+  '#6366f1',
+  '#8b5cf6',
+  '#a855f7',
+  '#c084fc',
+  '#e879f9',
+  '#f472b6',
+  '#fb7185',
+  '#f87171',
+  '#fca5a5'
 ]
 
 export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: ModelMetricsProps) {
-  const [features, setFeatures] = useState<FeatureItem[]>(mockFeatureImportance)
-  const [folds,    setFolds]    = useState<FoldItem[]>(mockFoldMetrics)
+  const { data } = useQuery({
+    queryKey: ['modelMetrics', apiBase],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/model/metrics`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    retry: 1
+  })
 
-  useEffect(() => {
-    fetch(`${apiBase}/api/model/metrics`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.featureImportance && data.featureImportance.length > 0) {
-          setFeatures(data.featureImportance)
-        }
-        if (data.foldMetrics && data.foldMetrics.length > 0) {
-          setFolds(data.foldMetrics)
-        }
-      })
-      .catch(() => {
-        // API erişilemez — mock data kalır
-      })
-  }, [apiBase])
+  const features: FeatureItem[] =
+    data?.featureImportance?.length > 0 ? data.featureImportance : mockFeatureImportance
+  const folds: FoldItem[] = data?.foldMetrics?.length > 0 ? data.foldMetrics : mockFoldMetrics
 
-  const sortedFeatures = [...features]
-    .sort((a, b) => b.importance - a.importance)
-    .slice(0, 15)
+  const sortedFeatures = [...features].sort((a, b) => b.importance - a.importance).slice(0, 15)
 
   return (
     <div className="h-full overflow-y-auto">
@@ -68,7 +74,10 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
         {/* Main metrics */}
         <div className="grid grid-cols-4 gap-3">
           {DEFAULT_METRICS.map((m) => (
-            <div key={m.label} className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
+            <div
+              key={m.label}
+              className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50"
+            >
               <p className="text-slate-500 text-xs mb-1">{m.label}</p>
               <p className={`font-bold text-2xl ${m.color}`}>{m.value}</p>
               <p className="text-slate-600 text-xs mt-0.5">{m.sub}</p>
@@ -118,7 +127,8 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
         {/* Feature importance */}
         <div>
           <h2 className="text-slate-300 font-semibold text-sm mb-3">
-            Top 15 Feature Importance <span className="text-slate-500 font-normal">(XGBoost gain)</span>
+            Top 15 Feature Importance{' '}
+            <span className="text-slate-500 font-normal">(XGBoost gain)</span>
           </h2>
           <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 p-4">
             <div className="h-72">
@@ -148,7 +158,7 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
                       background: '#1e293b',
                       border: '1px solid #334155',
                       borderRadius: 8,
-                      fontSize: 11,
+                      fontSize: 11
                     }}
                     formatter={(v) => [`${(v ?? 0).toFixed(2)}%`, 'Önem']}
                   />
@@ -166,11 +176,14 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
         {/* Training info */}
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Veri',          value: '26,332 maç',   sub: '2000–2026 Regular Season'   },
-            { label: 'Eğitim Süresi', value: '~45 dk',       sub: 'RTX 4050 6GB, 236 feature'  },
-            { label: 'Optuna Sampler',value: 'TPESampler',   sub: 'MedianPruner, n_trials=150' },
+            { label: 'Veri', value: '26,332 maç', sub: '2000–2026 Regular Season' },
+            { label: 'Eğitim Süresi', value: '~45 dk', sub: 'RTX 4050 6GB, 236 feature' },
+            { label: 'Optuna Sampler', value: 'TPESampler', sub: 'MedianPruner, n_trials=150' }
           ].map((item) => (
-            <div key={item.label} className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/40">
+            <div
+              key={item.label}
+              className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/40"
+            >
               <p className="text-slate-500 text-xs">{item.label}</p>
               <p className="text-white font-semibold mt-1">{item.value}</p>
               <p className="text-slate-600 text-xs mt-0.5">{item.sub}</p>

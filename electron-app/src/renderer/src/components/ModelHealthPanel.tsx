@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { Activity, Target, Clock, TrendingUp } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 
 interface ModelHealthPanelProps {
   apiBase?: string
@@ -7,31 +7,31 @@ interface ModelHealthPanelProps {
 
 // Gerçek OOF değerleri — 04_evaluate_model.py, 2026-02-22
 const OOF_ACCURACY = 66.7
-const BRIER_SCORE  = 0.2105
-const LAST_TUNING  = '22 Şub 2026'
+const BRIER_SCORE = 0.2105
+const LAST_TUNING = '22 Şub 2026'
 
-export default function ModelHealthPanel({ apiBase = 'http://127.0.0.1:8765' }: ModelHealthPanelProps) {
-  const [recent, setRecent] = useState<{ correct: number; total: number }>({ correct: 0, total: 0 })
+export default function ModelHealthPanel({
+  apiBase = 'http://127.0.0.1:8765'
+}: ModelHealthPanelProps) {
+  const { data } = useQuery({
+    queryKey: ['history', apiBase],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/history`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    retry: 1
+  })
 
-  useEffect(() => {
-    fetch(`${apiBase}/api/history`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.stats) {
-          const s = data.stats
-          const tier = s.byTier || {}
-          const totalCompleted = s.completedGames ?? 0
-          const totalCorrect =
-            (tier.HIGH?.correct ?? 0) +
-            (tier.MEDIUM?.correct ?? 0) +
-            (tier.LOW?.correct ?? 0)
-          setRecent({ correct: totalCorrect, total: totalCompleted })
-        }
-      })
-      .catch(() => {
-        // API erişilemez — varsayılan 0/0 kalır
-      })
-  }, [apiBase])
+  let recent = { correct: 0, total: 0 }
+  if (data?.stats) {
+    const s = data.stats
+    const tier = s.byTier || {}
+    const totalCompleted = s.completedGames ?? 0
+    const totalCorrect =
+      (tier.HIGH?.correct ?? 0) + (tier.MEDIUM?.correct ?? 0) + (tier.LOW?.correct ?? 0)
+    recent = { correct: totalCorrect, total: totalCompleted }
+  }
 
   const hasRecent = recent.total > 0
   const recentAcc = hasRecent ? Math.round((recent.correct / recent.total) * 100) : null

@@ -21,7 +21,7 @@ const today = new Date().toLocaleDateString('tr-TR', {
   weekday: 'long',
   day: 'numeric',
   month: 'long',
-  year: 'numeric',
+  year: 'numeric'
 })
 
 const filterBtnClass = (active: boolean) =>
@@ -40,7 +40,7 @@ export default function Dashboard({
   apiError = null,
   onRefresh,
   watchedGames = new Set(),
-  onToggleWatch,
+  onToggleWatch
 }: DashboardProps) {
   const [filterConf, setFilterConf] = useState<ConfFilter>('ALL')
   const [filterStrong, setFilterStrong] = useState(false)
@@ -142,9 +142,32 @@ export default function Dashboard({
       <div className="flex-1 overflow-y-auto p-5">
         {/* Loading */}
         {isLoading && (
-          <div className="flex items-center justify-center h-64 text-slate-500 text-sm gap-2">
-            <RefreshCw size={16} className="animate-spin" />
-            <span>Tahminler yükleniyor...</span>
+          <div className="grid grid-cols-2 gap-3">
+            {[...Array(6)].map((_, i) => (
+              <div
+                key={i}
+                className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-4 animate-pulse flex flex-col gap-4"
+              >
+                <div className="flex justify-between items-center">
+                  <div className="w-20 h-4 bg-slate-700/50 rounded"></div>
+                  <div className="w-12 h-4 bg-slate-700/50 rounded"></div>
+                </div>
+                <div className="flex justify-between items-center gap-4">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-10 h-10 bg-slate-700/50 rounded-full"></div>
+                    <div className="w-16 h-3 bg-slate-700/50 rounded"></div>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="h-6 bg-slate-700/50 rounded"></div>
+                    <div className="h-2 bg-slate-700/50 rounded w-2/3 mx-auto"></div>
+                  </div>
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-10 h-10 bg-slate-700/50 rounded-full"></div>
+                    <div className="w-16 h-3 bg-slate-700/50 rounded"></div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

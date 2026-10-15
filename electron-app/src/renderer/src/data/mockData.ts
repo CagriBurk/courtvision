@@ -8,8 +8,20 @@ export const NBA_LOGO = 'https://a.espncdn.com/i/teamlogos/leagues/500/nba.png'
 export const mockGames: Game[] = [
   {
     id: 'g1',
-    home: { id: '1610612744', name: 'Golden State Warriors', abbreviation: 'GSW', color: '#1D428A', logoUrl: logo('gs') },
-    away: { id: '1610612738', name: 'Boston Celtics', abbreviation: 'BOS', color: '#007A33', logoUrl: logo('bos') },
+    home: {
+      id: '1610612744',
+      name: 'Golden State Warriors',
+      abbreviation: 'GSW',
+      color: '#1D428A',
+      logoUrl: logo('gs')
+    },
+    away: {
+      id: '1610612738',
+      name: 'Boston Celtics',
+      abbreviation: 'BOS',
+      color: '#007A33',
+      logoUrl: logo('bos')
+    },
     probHome: 0.673,
     confidence: 'HIGH',
     gameTime: '22:00 TR',
@@ -19,15 +31,27 @@ export const mockGames: Game[] = [
       { label: 'Son 10 Maç Formu', value: 8, positive: true },
       { label: 'Deplasman B2B Dezavantajı', value: 7, positive: true },
       { label: 'H2H İç Saha Oranı', value: 5, positive: true },
-      { label: 'Boston Hücum Verimliliği', value: -4, positive: false },
+      { label: 'Boston Hücum Verimliliği', value: -4, positive: false }
     ],
     homeForm: [1, 1, 0, 1, 1, 1, 0, 1, 1, 1],
-    awayForm: [0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+    awayForm: [0, 1, 1, 0, 1, 0, 1, 1, 0, 1]
   },
   {
     id: 'g2',
-    home: { id: '1610612747', name: 'Los Angeles Lakers', abbreviation: 'LAL', color: '#552583', logoUrl: logo('lal') },
-    away: { id: '1610612748', name: 'Miami Heat', abbreviation: 'MIA', color: '#98002E', logoUrl: logo('mia') },
+    home: {
+      id: '1610612747',
+      name: 'Los Angeles Lakers',
+      abbreviation: 'LAL',
+      color: '#552583',
+      logoUrl: logo('lal')
+    },
+    away: {
+      id: '1610612748',
+      name: 'Miami Heat',
+      abbreviation: 'MIA',
+      color: '#98002E',
+      logoUrl: logo('mia')
+    },
     probHome: 0.614,
     confidence: 'MEDIUM',
     gameTime: '04:30 TR',
@@ -37,15 +61,27 @@ export const mockGames: Game[] = [
       { label: 'Rakip Kalitesi Ortalaması', value: 5, positive: true },
       { label: 'İç Saha Galibiyet Oranı', value: 4, positive: true },
       { label: 'Heat Puan Farkı L5', value: -6, positive: false },
-      { label: 'Yorgunluk Farkı', value: 2, positive: true },
+      { label: 'Yorgunluk Farkı', value: 2, positive: true }
     ],
     homeForm: [1, 0, 1, 1, 0, 1, 0, 1, 1, 0],
-    awayForm: [1, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+    awayForm: [1, 1, 0, 0, 1, 1, 0, 0, 1, 0]
   },
   {
     id: 'g3',
-    home: { id: '1610612752', name: 'New York Knicks', abbreviation: 'NYK', color: '#006BB6', logoUrl: logo('ny') },
-    away: { id: '1610612750', name: 'Minnesota Timberwolves', abbreviation: 'MIN', color: '#0C2340', logoUrl: logo('min') },
+    home: {
+      id: '1610612752',
+      name: 'New York Knicks',
+      abbreviation: 'NYK',
+      color: '#006BB6',
+      logoUrl: logo('ny')
+    },
+    away: {
+      id: '1610612750',
+      name: 'Minnesota Timberwolves',
+      abbreviation: 'MIN',
+      color: '#0C2340',
+      logoUrl: logo('min')
+    },
     probHome: 0.538,
     confidence: 'LOW',
     gameTime: '01:30 TR',
@@ -55,15 +91,27 @@ export const mockGames: Game[] = [
       { label: 'İç Saha Avantajı', value: 4, positive: true },
       { label: 'MIN Hücum Verimliliği L10', value: -5, positive: false },
       { label: 'Puan Farkı Ortalaması', value: 2, positive: true },
-      { label: 'Seri Farkı', value: -2, positive: false },
+      { label: 'Seri Farkı', value: -2, positive: false }
     ],
     homeForm: [0, 1, 0, 1, 1, 0, 0, 1, 0, 1],
-    awayForm: [1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+    awayForm: [1, 1, 0, 1, 0, 1, 1, 0, 1, 1]
   },
   {
     id: 'g4',
-    home: { id: '1610612749', name: 'Milwaukee Bucks', abbreviation: 'MIL', color: '#00471B', logoUrl: logo('mil') },
-    away: { id: '1610612753', name: 'Orlando Magic', abbreviation: 'ORL', color: '#0077C0', logoUrl: logo('orl') },
+    home: {
+      id: '1610612749',
+      name: 'Milwaukee Bucks',
+      abbreviation: 'MIL',
+      color: '#00471B',
+      logoUrl: logo('mil')
+    },
+    away: {
+      id: '1610612753',
+      name: 'Orlando Magic',
+      abbreviation: 'ORL',
+      color: '#0077C0',
+      logoUrl: logo('orl')
+    },
     probHome: 0.712,
     confidence: 'HIGH',
     gameTime: '02:00 TR',
@@ -73,15 +121,27 @@ export const mockGames: Game[] = [
       { label: 'Son 5 Maç Formu', value: 10, positive: true },
       { label: 'SRS Farkı', value: 8, positive: true },
       { label: 'H2H İç Saha Oranı', value: 6, positive: true },
-      { label: 'Orlando Savunma Kalitesi', value: -3, positive: false },
+      { label: 'Orlando Savunma Kalitesi', value: -3, positive: false }
     ],
     homeForm: [1, 1, 1, 0, 1, 1, 1, 0, 1, 1],
-    awayForm: [0, 0, 1, 0, 1, 0, 0, 1, 0, 1],
+    awayForm: [0, 0, 1, 0, 1, 0, 0, 1, 0, 1]
   },
   {
     id: 'g5',
-    home: { id: '1610612745', name: 'Houston Rockets', abbreviation: 'HOU', color: '#CE1141', logoUrl: logo('hou') },
-    away: { id: '1610612759', name: 'San Antonio Spurs', abbreviation: 'SAS', color: '#8A8D8F', logoUrl: logo('sa') },
+    home: {
+      id: '1610612745',
+      name: 'Houston Rockets',
+      abbreviation: 'HOU',
+      color: '#CE1141',
+      logoUrl: logo('hou')
+    },
+    away: {
+      id: '1610612759',
+      name: 'San Antonio Spurs',
+      abbreviation: 'SAS',
+      color: '#8A8D8F',
+      logoUrl: logo('sa')
+    },
     probHome: 0.589,
     confidence: 'MEDIUM',
     gameTime: '03:00 TR',
@@ -91,15 +151,27 @@ export const mockGames: Game[] = [
       { label: 'Opp Quality L10', value: 7, positive: true },
       { label: 'İç Saha Galibiyet Serisi', value: 4, positive: true },
       { label: 'SAS Son Form', value: -5, positive: false },
-      { label: 'Yorgunluk Dengesi', value: 1, positive: true },
+      { label: 'Yorgunluk Dengesi', value: 1, positive: true }
     ],
     homeForm: [1, 0, 1, 1, 1, 0, 1, 0, 1, 1],
-    awayForm: [0, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+    awayForm: [0, 1, 0, 0, 1, 0, 1, 0, 0, 1]
   },
   {
     id: 'g6',
-    home: { id: '1610612754', name: 'Indiana Pacers', abbreviation: 'IND', color: '#002D62', logoUrl: logo('ind') },
-    away: { id: '1610612755', name: 'Philadelphia 76ers', abbreviation: 'PHI', color: '#006BB6', logoUrl: logo('phi') },
+    home: {
+      id: '1610612754',
+      name: 'Indiana Pacers',
+      abbreviation: 'IND',
+      color: '#002D62',
+      logoUrl: logo('ind')
+    },
+    away: {
+      id: '1610612755',
+      name: 'Philadelphia 76ers',
+      abbreviation: 'PHI',
+      color: '#006BB6',
+      logoUrl: logo('phi')
+    },
     probHome: 0.621,
     confidence: 'MEDIUM',
     gameTime: '01:00 TR',
@@ -109,9 +181,9 @@ export const mockGames: Game[] = [
       { label: 'Pace Avantajı', value: 5, positive: true },
       { label: 'H2H İç Saha L5', value: 4, positive: true },
       { label: 'PHI Savunma L10', value: -3, positive: false },
-      { label: 'Rest Avantajı', value: 3, positive: true },
+      { label: 'Rest Avantajı', value: 3, positive: true }
     ],
     homeForm: [1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
-    awayForm: [0, 0, 1, 1, 0, 0, 1, 0, 1, 0],
-  },
+    awayForm: [0, 0, 1, 1, 0, 0, 1, 0, 1, 0]
+  }
 ]

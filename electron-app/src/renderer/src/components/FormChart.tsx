@@ -5,7 +5,7 @@ import {
   YAxis,
   ResponsiveContainer,
   Tooltip,
-  ReferenceLine,
+  ReferenceLine
 } from 'recharts'
 
 interface FormChartProps {
@@ -23,12 +23,12 @@ export default function FormChart({
   homeColor,
   awayColor,
   homeAbbr,
-  awayAbbr,
+  awayAbbr
 }: FormChartProps) {
   const data = homeForm.map((h, i) => ({
     game: i + 1,
     [homeAbbr]: h,
-    [awayAbbr]: awayForm[i],
+    [awayAbbr]: awayForm[i]
   }))
 
   return (
@@ -56,7 +56,7 @@ export default function FormChart({
               border: '1px solid #334155',
               borderRadius: 8,
               fontSize: 11,
-              color: '#e2e8f0',
+              color: '#e2e8f0'
             }}
             formatter={(v, name) => [(v ?? 0) === 1 ? 'Galibiyet' : 'Mağlubiyet', name as string]}
           />

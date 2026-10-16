@@ -14,19 +14,19 @@ interface PredictionCardProps {
 const confidenceStyle: Record<string, string> = {
   HIGH: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
   MEDIUM: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  LOW: 'bg-slate-600/20 text-slate-400 border-slate-600/40',
+  LOW: 'bg-slate-600/20 text-slate-400 border-slate-600/40'
 }
 
 const confidenceLabel: Record<string, string> = {
   HIGH: 'Yüksek Güven',
   MEDIUM: 'Orta Güven',
-  LOW: 'Düşük Güven',
+  LOW: 'Düşük Güven'
 }
 
 // Takımın en kritik Out oyuncusunu bul — top player ise öncelikli
 function getCriticalOut(
   injuries: InjuredPlayer[],
-  topPlayers: TopPlayer[],
+  topPlayers: TopPlayer[]
 ): { name: string; extra: number } | null {
   const outList = injuries.filter((p) => p.status === 'Out' || p.status === 'Doubtful')
   if (outList.length === 0) return null
@@ -77,7 +77,7 @@ export default function PredictionCard({
   isSelected,
   onSelect,
   isWatched = false,
-  onToggleWatch,
+  onToggleWatch
 }: PredictionCardProps) {
   const predictedHome = game.probHome >= 0.5
   const winner = predictedHome ? game.home : game.away
@@ -97,7 +97,9 @@ export default function PredictionCard({
     >
       {/* Confidence badge */}
       <div className="flex items-center justify-between mb-3">
-        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${confidenceStyle[game.confidence]}`}>
+        <span
+          className={`text-xs px-2 py-0.5 rounded-full border font-medium ${confidenceStyle[game.confidence]}`}
+        >
           {confidenceLabel[game.confidence]}
         </span>
         <ChevronRight

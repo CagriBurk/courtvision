@@ -3,12 +3,12 @@ export interface Team {
   name: string
   abbreviation: string
   color: string
-  logoUrl: string   // ESPN CDN logo
+  logoUrl: string // ESPN CDN logo
 }
 
 export interface WinFactor {
   label: string
-  value: number   // pozitif = ev sahibi lehine, negatif = deplasman lehine
+  value: number // pozitif = ev sahibi lehine, negatif = deplasman lehine
   positive: boolean
 }
 
@@ -32,12 +32,12 @@ export interface Game {
   id: string
   home: Team
   away: Team
-  probHome: number   // 0-1
+  probHome: number // 0-1
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   gameTime: string
   venue: string
   factors: WinFactor[]
-  homeForm: number[]   // son 10 maç: 1=G, 0=M
+  homeForm: number[] // son 10 maç: 1=G, 0=M
   awayForm: number[]
   homeInjuries?: InjuredPlayer[]
   awayInjuries?: InjuredPlayer[]

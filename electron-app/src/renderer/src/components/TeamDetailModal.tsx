@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import {
   LineChart,
   Line,
@@ -7,7 +7,7 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
+  ReferenceLine
 } from 'recharts'
 import { Team } from '../types'
 
@@ -52,16 +52,15 @@ function avg(arr: (number | null)[], decimals = 1): string {
 }
 
 export default function TeamDetailModal({ apiBase, teamId, team, onClose }: TeamDetailModalProps) {
-  const [data, setData] = useState<TeamStats | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    setLoading(true)
-    fetch(`${apiBase}/api/team/${teamId}/stats?n_games=15`)
-      .then((r) => r.json())
-      .then((d) => { setData(d); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [apiBase, teamId])
+  const { data, isLoading: loading } = useQuery<TeamStats>({
+    queryKey: ['teamStats', apiBase, teamId],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/team/${teamId}/stats?n_games=15`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    retry: 1
+  })
 
   const games = data?.recent_games ?? []
   const chartData = games.map((g, i) => ({
@@ -69,7 +68,7 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
     pts: g.pts_scored,
     opp: g.pts_allowed,
     pm: g.plus_minus,
-    label: new Date(g.game_date).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' }),
+    label: new Date(g.game_date).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' })
   }))
 
   return (
@@ -87,7 +86,9 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
             src={team.logoUrl}
             alt={team.abbreviation}
             className="w-10 h-10 object-contain"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            onError={(e) => {
+              ;(e.target as HTMLImageElement).style.display = 'none'
+            }}
           />
           <div className="flex-1">
             <p className="text-white font-bold text-base leading-none">{team.name}</p>
@@ -114,8 +115,20 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {loading && (
-            <div className="flex items-center justify-center h-40 text-slate-500 text-sm">
-              Yükleniyor...
+            <div className="animate-pulse space-y-6">
+              <div>
+                <div className="w-48 h-3 bg-slate-700/50 rounded mb-2"></div>
+                <div className="h-44 bg-slate-800/40 rounded-xl"></div>
+              </div>
+              <div className="grid grid-cols-5 gap-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-16 bg-slate-800/50 rounded-lg"></div>
+                ))}
+              </div>
+              <div>
+                <div className="w-24 h-3 bg-slate-700/50 rounded mb-2"></div>
+                <div className="h-64 bg-slate-800/40 rounded-xl"></div>
+              </div>
             </div>
           )}
 
@@ -142,11 +155,16 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
                         domain={['auto', 'auto']}
                       />
                       <Tooltip
-                        contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                        contentStyle={{
+                          background: '#1e293b',
+                          border: '1px solid #334155',
+                          borderRadius: 8,
+                          fontSize: 11
+                        }}
                         labelStyle={{ color: '#94a3b8' }}
                         formatter={(val, name) => [
                           val ?? 0,
-                          (name as string) === 'pts' ? 'Pts' : 'Opp',
+                          (name as string) === 'pts' ? 'Pts' : 'Opp'
                         ]}
                       />
                       <ReferenceLine y={110} stroke="#334155" strokeDasharray="3 3" />
@@ -171,7 +189,10 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
                   </ResponsiveContainer>
                   <div className="flex gap-4 mt-1">
                     <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-0.5 rounded-full" style={{ backgroundColor: team.color }} />
+                      <div
+                        className="w-3 h-0.5 rounded-full"
+                        style={{ backgroundColor: team.color }}
+                      />
                       <span className="text-slate-400 text-[10px]">Pts</span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -187,9 +208,28 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
                 {[
                   { label: 'Pts', val: data.summary.pts_avg_L10.toFixed(1) },
                   { label: 'Opp', val: data.summary.pts_allowed_L10.toFixed(1) },
-                  { label: 'PM', val: (data.summary.point_diff_L10 >= 0 ? '+' : '') + data.summary.point_diff_L10.toFixed(1) },
-                  { label: 'FG%', val: avg(games.map((g) => g.fg_pct != null ? g.fg_pct * 100 : null), 1) + '%' },
-                  { label: '3P%', val: avg(games.map((g) => g.fg3_pct != null ? g.fg3_pct * 100 : null), 1) + '%' },
+                  {
+                    label: 'PM',
+                    val:
+                      (data.summary.point_diff_L10 >= 0 ? '+' : '') +
+                      data.summary.point_diff_L10.toFixed(1)
+                  },
+                  {
+                    label: 'FG%',
+                    val:
+                      avg(
+                        games.map((g) => (g.fg_pct != null ? g.fg_pct * 100 : null)),
+                        1
+                      ) + '%'
+                  },
+                  {
+                    label: '3P%',
+                    val:
+                      avg(
+                        games.map((g) => (g.fg3_pct != null ? g.fg3_pct * 100 : null)),
+                        1
+                      ) + '%'
+                  }
                 ].map(({ label, val }) => (
                   <div key={label} className="bg-slate-800/50 rounded-lg p-2.5 text-center">
                     <p className="text-slate-500 text-[10px] mb-1">{label}</p>
@@ -205,7 +245,8 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
                 <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 overflow-hidden">
                   {[...games].reverse().map((g, i) => {
                     const dateStr = new Date(g.game_date).toLocaleDateString('tr-TR', {
-                      month: 'short', day: 'numeric',
+                      month: 'short',
+                      day: 'numeric'
                     })
                     return (
                       <div
@@ -231,7 +272,8 @@ export default function TeamDetailModal({ apiBase, teamId, team, onClose }: Team
                             g.plus_minus >= 0 ? 'text-emerald-400' : 'text-red-400'
                           }`}
                         >
-                          {g.plus_minus >= 0 ? '+' : ''}{g.plus_minus}
+                          {g.plus_minus >= 0 ? '+' : ''}
+                          {g.plus_minus}
                         </span>
                       </div>
                     )

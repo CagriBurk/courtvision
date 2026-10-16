@@ -26,23 +26,29 @@ function TeamLogoSmall({ team }: { team: Team }) {
 }
 
 const statusColor: Record<string, string> = {
-  'Out':          'text-red-400',
-  'Doubtful':     'text-orange-400',
-  'Questionable': 'text-amber-400',
-  'Day-To-Day':   'text-amber-400',
+  Out: 'text-red-400',
+  Doubtful: 'text-orange-400',
+  Questionable: 'text-amber-400',
+  'Day-To-Day': 'text-amber-400'
 }
 
 const statusDot: Record<string, string> = {
-  'Out':          'bg-red-500',
-  'Doubtful':     'bg-orange-500',
-  'Questionable': 'bg-amber-500',
-  'Day-To-Day':   'bg-amber-500',
+  Out: 'bg-red-500',
+  Doubtful: 'bg-orange-500',
+  Questionable: 'bg-amber-500',
+  'Day-To-Day': 'bg-amber-500'
 }
 
 function InjuryList({ injuries, label }: { injuries: InjuredPlayer[]; label: string }) {
-  const shown = injuries.filter(
-    (p) => p.status === 'Out' || p.status === 'Doubtful' || p.status === 'Questionable' || p.status === 'Day-To-Day'
-  ).slice(0, 4)
+  const shown = injuries
+    .filter(
+      (p) =>
+        p.status === 'Out' ||
+        p.status === 'Doubtful' ||
+        p.status === 'Questionable' ||
+        p.status === 'Day-To-Day'
+    )
+    .slice(0, 4)
 
   if (shown.length === 0) return null
 
@@ -52,10 +58,20 @@ function InjuryList({ injuries, label }: { injuries: InjuredPlayer[]; label: str
       <div className="space-y-1">
         {shown.map((p) => (
           <div key={p.id} className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot[p.status] ?? 'bg-slate-500'}`} />
+            <div
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot[p.status] ?? 'bg-slate-500'}`}
+            />
             <span className="text-slate-300 text-xs flex-1 truncate">{p.name}</span>
-            <span className={`text-[10px] font-medium shrink-0 ${statusColor[p.status] ?? 'text-slate-400'}`}>
-              {p.status === 'Day-To-Day' ? 'Günlük' : p.status === 'Questionable' ? 'Şüpheli' : p.status === 'Doubtful' ? 'Şüpheli' : 'Yok'}
+            <span
+              className={`text-[10px] font-medium shrink-0 ${statusColor[p.status] ?? 'text-slate-400'}`}
+            >
+              {p.status === 'Day-To-Day'
+                ? 'Günlük'
+                : p.status === 'Questionable'
+                  ? 'Şüpheli'
+                  : p.status === 'Doubtful'
+                    ? 'Şüpheli'
+                    : 'Yok'}
             </span>
           </div>
         ))}
@@ -64,7 +80,15 @@ function InjuryList({ injuries, label }: { injuries: InjuredPlayer[]; label: str
   )
 }
 
-function PlayerList({ players, label, color }: { players: TopPlayer[]; label: string; color: string }) {
+function PlayerList({
+  players,
+  label,
+  color
+}: {
+  players: TopPlayer[]
+  label: string
+  color: string
+}) {
   if (players.length === 0) return null
 
   return (
@@ -110,7 +134,7 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
   const awayTopPlayers = game.awayTopPlayers ?? []
 
   const hasInjuries = homeInjuries.length > 0 || awayInjuries.length > 0
-  const hasPlayers  = homeTopPlayers.length > 0 || awayTopPlayers.length > 0
+  const hasPlayers = homeTopPlayers.length > 0 || awayTopPlayers.length > 0
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -170,7 +194,8 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
                         factor.positive ? 'text-emerald-400' : 'text-red-400'
                       }`}
                     >
-                      {factor.positive ? '+' : ''}{factor.value}%
+                      {factor.positive ? '+' : ''}
+                      {factor.value}%
                     </span>
                   </div>
                 </div>
@@ -195,8 +220,16 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
             <Users size={11} />
             KADRO (Sezon Ort.)
           </p>
-          <PlayerList players={homeTopPlayers} label={`${game.home.abbreviation} (Ev)`} color={game.home.color} />
-          <PlayerList players={awayTopPlayers} label={`${game.away.abbreviation} (Dep)`} color={game.away.color} />
+          <PlayerList
+            players={homeTopPlayers}
+            label={`${game.home.abbreviation} (Ev)`}
+            color={game.home.color}
+          />
+          <PlayerList
+            players={awayTopPlayers}
+            label={`${game.away.abbreviation} (Dep)`}
+            color={game.away.color}
+          />
         </div>
       )}
 
@@ -236,8 +269,14 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
               onClick={() => onOpenTeam?.(game.away.id, game.away)}
               className="flex items-center gap-1.5 hover:opacity-75 transition-opacity"
             >
-              <div className="w-2 h-0.5 rounded-full" style={{ backgroundColor: game.away.color }} />
-              <div className="w-1 h-0.5 rounded-full" style={{ backgroundColor: game.away.color }} />
+              <div
+                className="w-2 h-0.5 rounded-full"
+                style={{ backgroundColor: game.away.color }}
+              />
+              <div
+                className="w-1 h-0.5 rounded-full"
+                style={{ backgroundColor: game.away.color }}
+              />
               <span className="text-slate-400 text-xs">{game.away.abbreviation} (Dep)</span>
             </button>
           </div>

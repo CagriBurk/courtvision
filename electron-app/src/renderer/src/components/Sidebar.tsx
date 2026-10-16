@@ -12,7 +12,7 @@ const navItems = [
   { page: 'dashboard' as NavPage, label: 'Dashboard', icon: LayoutDashboard },
   { page: 'history' as NavPage, label: 'Geçmiş', icon: History },
   { page: 'metrics' as NavPage, label: 'Model Metrikleri', icon: BarChart2 },
-  { page: 'settings' as NavPage, label: 'Ayarlar', icon: Settings },
+  { page: 'settings' as NavPage, label: 'Ayarlar', icon: Settings }
 ]
 
 export default function Sidebar({ activePage, onNavigate }: SidebarProps) {

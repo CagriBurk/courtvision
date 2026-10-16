@@ -131,9 +131,7 @@ export default function Settings() {
           </h2>
           <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 p-5 space-y-4">
             <div>
-              <label className="text-slate-400 text-xs font-medium mb-1.5 block">
-                Sezon Tipi
-              </label>
+              <label className="text-slate-400 text-xs font-medium mb-1.5 block">Sezon Tipi</label>
               <select
                 value={seasonFilter}
                 onChange={(e) => setSeasonFilter(e.target.value)}
@@ -162,7 +160,7 @@ export default function Settings() {
                 ['Feature Sayısı', '236'],
                 ['Veri Kaynağı', 'Kaggle + nba_api'],
                 ['Eğitim Verisi', '26,332 maç (2000–2026)'],
-                ['Son Model', '22 Şub 2026'],
+                ['Son Model', '22 Şub 2026']
               ].map(([k, v]) => (
                 <div key={k} className="flex gap-2">
                   <span className="text-slate-500 w-36">{k}</span>
@@ -177,9 +175,7 @@ export default function Settings() {
         <button
           onClick={handleSave}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-            saved
-              ? 'bg-emerald-600 text-white'
-              : 'bg-blue-600 hover:bg-blue-500 text-white'
+            saved ? 'bg-emerald-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'
           }`}
         >
           {saved ? <CheckCircle size={15} /> : <Save size={15} />}

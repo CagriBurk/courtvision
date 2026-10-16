@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { CheckCircle, XCircle, Minus } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { PredictionRecord } from '../types'
 
 interface HistoryProps {
@@ -9,13 +9,13 @@ interface HistoryProps {
 const confidenceLabel: Record<string, string> = {
   HIGH: 'Yüksek',
   MEDIUM: 'Orta',
-  LOW: 'Düşük',
+  LOW: 'Düşük'
 }
 
 const confidenceStyle: Record<string, string> = {
   HIGH: 'text-emerald-400',
   MEDIUM: 'text-amber-400',
-  LOW: 'text-slate-400',
+  LOW: 'text-slate-400'
 }
 
 function computeStats(records: PredictionRecord[]) {
@@ -25,7 +25,7 @@ function computeStats(records: PredictionRecord[]) {
   const byTier = {
     HIGH: { correct: 0, total: 0 },
     MEDIUM: { correct: 0, total: 0 },
-    LOW: { correct: 0, total: 0 },
+    LOW: { correct: 0, total: 0 }
   }
 
   for (const r of records) {
@@ -41,7 +41,7 @@ function computeStats(records: PredictionRecord[]) {
     weightedAcc: totalWeight > 0 ? Math.round((correctWeight / totalWeight) * 100) : null,
     total: records.filter((r) => r.correct !== null).length,
     correct: records.filter((r) => r.correct === true).length,
-    byTier,
+    byTier
   }
 }
 
@@ -58,27 +58,23 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('tr-TR', {
     weekday: 'long',
     day: 'numeric',
-    month: 'long',
+    month: 'long'
   })
 }
 
 export default function History({ apiBase = 'http://127.0.0.1:8765' }: HistoryProps) {
-  const [predictions, setPredictions] = useState<PredictionRecord[]>([])
-  const [apiError, setApiError] = useState(false)
+  const { data, isError, isLoading } = useQuery({
+    queryKey: ['history', apiBase],
+    queryFn: async () => {
+      const res = await fetch(`${apiBase}/api/history`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    retry: 1
+  })
 
-  useEffect(() => {
-    setApiError(false)
-    fetch(`${apiBase}/api/history`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.predictions) {
-          setPredictions(data.predictions)
-        }
-      })
-      .catch(() => {
-        setApiError(true)
-      })
-  }, [apiBase])
+  const predictions: PredictionRecord[] = data?.predictions || []
+  const apiError = isError
 
   const stats = computeStats(predictions)
   const grouped = groupByDate(predictions)
@@ -93,110 +89,161 @@ export default function History({ apiBase = 'http://127.0.0.1:8765' }: HistoryPr
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {/* Summary stats */}
-        <div className="grid grid-cols-4 gap-3">
-          <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
-            <p className="text-slate-500 text-xs mb-1">Ağırlıklı Accuracy</p>
-            <p className="text-emerald-400 font-bold text-2xl">
-              {stats.weightedAcc !== null ? `${stats.weightedAcc}%` : '—'}
-            </p>
-            <p className="text-slate-600 text-xs mt-0.5">HIGH×3, MED×2, LOW×1</p>
-          </div>
-          <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
-            <p className="text-slate-500 text-xs mb-1">Toplam Doğru</p>
-            <p className="text-white font-bold text-2xl">
-              {stats.correct}/{stats.total}
-            </p>
-            <p className="text-slate-600 text-xs mt-0.5">
-              {stats.total > 0 ? `${Math.round((stats.correct / stats.total) * 100)}% ham accuracy` : '—'}
-            </p>
-          </div>
-          {(['HIGH', 'MEDIUM', 'LOW'] as const).map((tier) => {
-            const t = stats.byTier[tier]
-            const acc = t.total > 0 ? Math.round((t.correct / t.total) * 100) : null
-            return (
-              <div key={tier} className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
-                <p className={`text-xs mb-1 font-medium ${confidenceStyle[tier]}`}>
-                  {confidenceLabel[tier]} Güven
-                </p>
-                <p className="text-white font-bold text-2xl">
-                  {acc !== null ? `${acc}%` : '—'}
-                </p>
-                <p className="text-slate-600 text-xs mt-0.5">{t.correct}/{t.total} doğru</p>
+        {isLoading ? (
+          <div className="grid grid-cols-4 gap-3 animate-pulse">
+            {[...Array(5)].map((_, i) => (
+              <div
+                key={i}
+                className="bg-slate-800/40 rounded-xl p-4 border border-slate-700/50 h-24 flex flex-col justify-between"
+              >
+                <div className="w-20 h-3 bg-slate-700/50 rounded"></div>
+                <div className="w-16 h-8 bg-slate-700/50 rounded"></div>
+                <div className="w-24 h-3 bg-slate-700/50 rounded"></div>
               </div>
-            )
-          })}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 gap-3">
+            <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
+              <p className="text-slate-500 text-xs mb-1">Ağırlıklı Accuracy</p>
+              <p className="text-emerald-400 font-bold text-2xl">
+                {stats.weightedAcc !== null ? `${stats.weightedAcc}%` : '—'}
+              </p>
+              <p className="text-slate-600 text-xs mt-0.5">HIGH×3, MED×2, LOW×1</p>
+            </div>
+            <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
+              <p className="text-slate-500 text-xs mb-1">Toplam Doğru</p>
+              <p className="text-white font-bold text-2xl">
+                {stats.correct}/{stats.total}
+              </p>
+              <p className="text-slate-600 text-xs mt-0.5">
+                {stats.total > 0
+                  ? `${Math.round((stats.correct / stats.total) * 100)}% ham accuracy`
+                  : '—'}
+              </p>
+            </div>
+            {(['HIGH', 'MEDIUM', 'LOW'] as const).map((tier) => {
+              const t = stats.byTier[tier]
+              const acc = t.total > 0 ? Math.round((t.correct / t.total) * 100) : null
+              return (
+                <div
+                  key={tier}
+                  className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50"
+                >
+                  <p className={`text-xs mb-1 font-medium ${confidenceStyle[tier]}`}>
+                    {confidenceLabel[tier]} Güven
+                  </p>
+                  <p className="text-white font-bold text-2xl">{acc !== null ? `${acc}%` : '—'}</p>
+                  <p className="text-slate-600 text-xs mt-0.5">
+                    {t.correct}/{t.total} doğru
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
         {/* Prediction list by date */}
         <div className="space-y-5">
-          {grouped.map(([date, records]) => {
-            const dayCorrect = records.filter((r) => r.correct === true).length
-            return (
-              <div key={date}>
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-slate-400 text-sm font-medium capitalize">{formatDate(date)}</p>
-                  <span className="text-slate-500 text-xs">
-                    {dayCorrect}/{records.length} doğru
-                  </span>
-                </div>
-                <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 overflow-hidden">
-                  {records.map((r, i) => (
-                    <div
-                      key={r.gameId}
-                      className={`flex items-center gap-4 px-4 py-3 ${
-                        i < records.length - 1 ? 'border-b border-slate-700/30' : ''
-                      }`}
-                    >
-                      {/* Result icon */}
-                      <div className="shrink-0">
-                        {r.correct === true && <CheckCircle size={16} className="text-emerald-500" />}
-                        {r.correct === false && <XCircle size={16} className="text-red-500" />}
-                        {r.correct === null && <Minus size={16} className="text-slate-600" />}
-                      </div>
-
-                      {/* Matchup */}
-                      <div className="flex-1 flex items-center gap-2">
-                        <span className="text-white font-semibold text-sm">{r.homeTeam}</span>
-                        <span className="text-slate-600 text-xs">vs</span>
-                        <span className="text-slate-300 text-sm">{r.awayTeam}</span>
-                      </div>
-
-                      {/* Prediction */}
-                      <div className="text-right">
-                        <p className="text-slate-400 text-xs">Tahmin</p>
-                        <p className={`text-sm font-semibold ${r.correct === null ? 'text-slate-400' : r.correct ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {r.predictedWinner}
-                        </p>
-                      </div>
-
-                      {/* Actual */}
-                      <div className="text-right w-16">
-                        <p className="text-slate-400 text-xs">Gerçek</p>
-                        <p className="text-white text-sm font-semibold">
-                          {r.actualWinner ?? '—'}
-                        </p>
-                      </div>
-
-                      {/* Probability */}
-                      <div className="text-right w-12">
-                        <p className="text-slate-400 text-xs">Olasılık</p>
-                        <p className="text-slate-300 text-sm font-semibold">
-                          {Math.round(Math.max(r.probHome, 1 - r.probHome) * 100)}%
-                        </p>
-                      </div>
-
-                      {/* Confidence */}
-                      <div className="w-16 text-right">
-                        <span className={`text-xs font-medium ${confidenceStyle[r.confidence]}`}>
-                          {confidenceLabel[r.confidence]}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          {isLoading && (
+            <div className="space-y-4 animate-pulse">
+              <div className="flex justify-between mb-2">
+                <div className="w-32 h-4 bg-slate-700/50 rounded"></div>
+                <div className="w-16 h-4 bg-slate-700/50 rounded"></div>
               </div>
-            )
-          })}
+              <div className="bg-slate-800/40 rounded-xl border border-slate-700/40">
+                {[...Array(3)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-4 px-4 py-4 border-b border-slate-700/30"
+                  >
+                    <div className="w-4 h-4 bg-slate-700/50 rounded-full"></div>
+                    <div className="flex-1 w-40 h-4 bg-slate-700/50 rounded"></div>
+                    <div className="w-12 h-6 bg-slate-700/50 rounded"></div>
+                    <div className="w-12 h-6 bg-slate-700/50 rounded"></div>
+                    <div className="w-10 h-6 bg-slate-700/50 rounded"></div>
+                    <div className="w-12 h-6 bg-slate-700/50 rounded"></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!isLoading &&
+            grouped.map(([date, records]) => {
+              const dayCorrect = records.filter((r) => r.correct === true).length
+              return (
+                <div key={date}>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-slate-400 text-sm font-medium capitalize">
+                      {formatDate(date)}
+                    </p>
+                    <span className="text-slate-500 text-xs">
+                      {dayCorrect}/{records.length} doğru
+                    </span>
+                  </div>
+                  <div className="bg-slate-800/40 rounded-xl border border-slate-700/40 overflow-hidden">
+                    {records.map((r, i) => (
+                      <div
+                        key={r.gameId}
+                        className={`flex items-center gap-4 px-4 py-3 ${
+                          i < records.length - 1 ? 'border-b border-slate-700/30' : ''
+                        }`}
+                      >
+                        {/* Result icon */}
+                        <div className="shrink-0">
+                          {r.correct === true && (
+                            <CheckCircle size={16} className="text-emerald-500" />
+                          )}
+                          {r.correct === false && <XCircle size={16} className="text-red-500" />}
+                          {r.correct === null && <Minus size={16} className="text-slate-600" />}
+                        </div>
+
+                        {/* Matchup */}
+                        <div className="flex-1 flex items-center gap-2">
+                          <span className="text-white font-semibold text-sm">{r.homeTeam}</span>
+                          <span className="text-slate-600 text-xs">vs</span>
+                          <span className="text-slate-300 text-sm">{r.awayTeam}</span>
+                        </div>
+
+                        {/* Prediction */}
+                        <div className="text-right">
+                          <p className="text-slate-400 text-xs">Tahmin</p>
+                          <p
+                            className={`text-sm font-semibold ${r.correct === null ? 'text-slate-400' : r.correct ? 'text-emerald-400' : 'text-red-400'}`}
+                          >
+                            {r.predictedWinner}
+                          </p>
+                        </div>
+
+                        {/* Actual */}
+                        <div className="text-right w-16">
+                          <p className="text-slate-400 text-xs">Gerçek</p>
+                          <p className="text-white text-sm font-semibold">
+                            {r.actualWinner ?? '—'}
+                          </p>
+                        </div>
+
+                        {/* Probability */}
+                        <div className="text-right w-12">
+                          <p className="text-slate-400 text-xs">Olasılık</p>
+                          <p className="text-slate-300 text-sm font-semibold">
+                            {Math.round(Math.max(r.probHome, 1 - r.probHome) * 100)}%
+                          </p>
+                        </div>
+
+                        {/* Confidence */}
+                        <div className="w-16 text-right">
+                          <span className={`text-xs font-medium ${confidenceStyle[r.confidence]}`}>
+                            {confidenceLabel[r.confidence]}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
 
           {grouped.length === 0 && (
             <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">

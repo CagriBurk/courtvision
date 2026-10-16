@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import History from './pages/History'
@@ -11,7 +12,13 @@ import { Game, NavPage, Team } from './types'
 
 const API_BASE = 'http://127.0.0.1:8765'
 const WATCHED_KEY = 'nba_watched_games'
-const NOTIF_BEFORE_MS = 30 * 60 * 1000  // 30 dakika
+const NOTIF_BEFORE_MS = 30 * 60 * 1000 // 30 dakika
+
+async function fetchGamesFromApi(): Promise<{ games: Game[] }> {
+  const res = await fetch(`${API_BASE}/api/today-games`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
 
 /** "8:30 PM" veya "20:30" gibi saat string'ini bugünün ms timestamp'ine çevirir */
 function parseGameTimeMs(timeStr: string): number | null {
@@ -28,11 +35,26 @@ function parseGameTimeMs(timeStr: string): number | null {
 
 export default function App(): React.JSX.Element {
   const [page, setPage] = useState<NavPage>('dashboard')
-  const [games, setGames] = useState<Game[]>([])
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [apiConnected, setApiConnected] = useState(false)
-  const [apiError, setApiError] = useState<string | null>(null)
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['todayGames'],
+    queryFn: fetchGamesFromApi,
+    retry: 1
+  })
+
+  const games = data?.games || []
+  const apiConnected = !isError && !isLoading
+  const apiError = isError
+    ? 'FastAPI sunucusuna bağlanılamadı. Sunucuyu başlatın:\npython -m uvicorn src.api_server:app --host 127.0.0.1 --port 8765'
+    : null
+
+  // Ensure first game is selected when data is loaded
+  useEffect(() => {
+    if (games.length > 0 && !selectedGame) {
+      setSelectedGame(games[0])
+    }
+  }, [games, selectedGame])
 
   // Takip edilen maçlar (bildirim için)
   const [watchedGames, setWatchedGames] = useState<Set<string>>(() => {
@@ -49,32 +71,6 @@ export default function App(): React.JSX.Element {
   const [teamDetailId, setTeamDetailId] = useState<string | null>(null)
   const [teamDetailData, setTeamDetailData] = useState<Team | null>(null)
 
-  const fetchGames = useCallback(async () => {
-    setIsLoading(true)
-    setApiError(null)
-    try {
-      const res = await fetch(`${API_BASE}/api/today-games`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setApiConnected(true)
-      if (data.games && data.games.length > 0) {
-        setGames(data.games)
-        setSelectedGame((prev) => prev ?? data.games[0])
-      } else {
-        setGames([])
-      }
-    } catch (e) {
-      setApiConnected(false)
-      setApiError('FastAPI sunucusuna bağlanılamadı. Sunucuyu başlatın:\npython -m uvicorn src.api_server:app --host 127.0.0.1 --port 8765')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchGames()
-  }, [fetchGames])
-
   // Bildirimleri izlenen maçlara göre zamanla
   const scheduleNotif = useCallback((game: Game) => {
     const gameMs = parseGameTimeMs(game.gameTime)
@@ -86,7 +82,7 @@ export default function App(): React.JSX.Element {
       if (Notification.permission === 'granted') {
         new Notification(`${game.home.abbreviation} vs ${game.away.abbreviation} — 30 dk kaldı`, {
           body: `Tahmin: ${game.probHome >= 0.5 ? game.home.name : game.away.name} kazanır (${Math.round(Math.max(game.probHome, 1 - game.probHome) * 100)}%)`,
-          icon: game.home.logoUrl,
+          icon: game.home.logoUrl
         })
       }
       notifTimers.current.delete(game.id)
@@ -108,27 +104,33 @@ export default function App(): React.JSX.Element {
     }
   }, [games, watchedGames, scheduleNotif])
 
-  const toggleWatch = useCallback((gameId: string) => {
-    // Bildirim izni iste
-    if (Notification.permission === 'default') {
-      Notification.requestPermission()
-    }
-
-    setWatchedGames((prev) => {
-      const next = new Set(prev)
-      if (next.has(gameId)) {
-        next.delete(gameId)
-        const t = notifTimers.current.get(gameId)
-        if (t) { clearTimeout(t); notifTimers.current.delete(gameId) }
-      } else {
-        next.add(gameId)
-        const game = games.find((g) => g.id === gameId)
-        if (game) scheduleNotif(game)
+  const toggleWatch = useCallback(
+    (gameId: string) => {
+      // Bildirim izni iste
+      if (Notification.permission === 'default') {
+        Notification.requestPermission()
       }
-      localStorage.setItem(WATCHED_KEY, JSON.stringify([...next]))
-      return next
-    })
-  }, [games, scheduleNotif])
+
+      setWatchedGames((prev) => {
+        const next = new Set(prev)
+        if (next.has(gameId)) {
+          next.delete(gameId)
+          const t = notifTimers.current.get(gameId)
+          if (t) {
+            clearTimeout(t)
+            notifTimers.current.delete(gameId)
+          }
+        } else {
+          next.add(gameId)
+          const game = games.find((g) => g.id === gameId)
+          if (game) scheduleNotif(game)
+        }
+        localStorage.setItem(WATCHED_KEY, JSON.stringify([...next]))
+        return next
+      })
+    },
+    [games, scheduleNotif]
+  )
 
   const openTeamDetail = useCallback((teamId: string, team: Team) => {
     setTeamDetailId(teamId)
@@ -150,7 +152,7 @@ export default function App(): React.JSX.Element {
             isLoading={isLoading}
             apiConnected={apiConnected}
             apiError={apiError}
-            onRefresh={fetchGames}
+            onRefresh={() => refetch()}
             watchedGames={watchedGames}
             onToggleWatch={toggleWatch}
           />
@@ -165,10 +167,7 @@ export default function App(): React.JSX.Element {
           <div className="px-4 py-3 border-b border-slate-800 shrink-0">
             <p className="text-slate-400 text-xs font-medium tracking-wide">MAÇ DETAYI</p>
           </div>
-          <WhyWinsPanel
-            game={selectedGame}
-            onOpenTeam={openTeamDetail}
-          />
+          <WhyWinsPanel game={selectedGame} onOpenTeam={openTeamDetail} />
           <ModelHealthPanel apiBase={API_BASE} />
         </aside>
       )}
@@ -178,7 +177,10 @@ export default function App(): React.JSX.Element {
           apiBase={API_BASE}
           teamId={teamDetailId}
           team={teamDetailData}
-          onClose={() => { setTeamDetailId(null); setTeamDetailData(null) }}
+          onClose={() => {
+            setTeamDetailId(null)
+            setTeamDetailData(null)
+          }}
         />
       )}
     </div>

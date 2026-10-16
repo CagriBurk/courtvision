@@ -45,7 +45,7 @@ async function getProjectRoot(): Promise<string | null> {
   const result = await dialog.showOpenDialog({
     title: 'NBA Pred proje klasörünü seçin',
     properties: ['openDirectory'],
-    buttonLabel: 'Seç',
+    buttonLabel: 'Seç'
   })
 
   if (result.canceled || result.filePaths.length === 0) return null

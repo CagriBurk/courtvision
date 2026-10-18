@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import uvicorn
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -50,25 +52,31 @@ TEAM_COLORS: dict[str, str] = {
 
 CONF_TR_EN = {'YÜKSEK': 'HIGH', 'ORTA': 'MEDIUM', 'DÜŞÜK': 'LOW'}
 
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="NBA Predictor API",
-    description="Electron shell için local REST API",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 MODELS_DIR  = ROOT / "models"
 PROC_DIR    = ROOT / "data" / "processed"
 LIVE_DIR    = ROOT / "data" / "live"
 PRED_DIR    = ROOT / "data" / "predictions"
 REPORTS_DIR = ROOT / "reports"
+
+# ---------------------------------------------------------------------------
+# Background Scheduler
+# ---------------------------------------------------------------------------
+scheduler = AsyncIOScheduler()
+
+def _scheduled_prediction_refresh():
+    """Runs 05_predict_today.py to fetch new games and calculate features."""
+    import subprocess
+    script = ROOT / "src" / "05_predict_today.py"
+    try:
+        print("[Scheduler] Running daily prediction update...")
+        subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(ROOT),
+        )
+        print("[Scheduler] Daily prediction update finished.")
+    except Exception as e:
+        print(f"[Scheduler] Failed to update predictions: {e}")
 
 # ---------------------------------------------------------------------------
 # Uygulama başlarken yükle
@@ -123,8 +131,8 @@ def _run_predictions_if_stale() -> None:
         print("[API] Predictions updated.")
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     ok = _load_model()
     if ok:
         print(f"[API] Model loaded. {len(_feature_columns)} feature.")
@@ -137,7 +145,32 @@ async def startup_event():
     except Exception as e:
         print(f"[API] auto-predict skipped: {e}")
 
-    # Önceki günlerin sonuçlarını otomatik doldur (yerel master_games.parquet'ten)
+    # Start the scheduler
+    scheduler.add_job(_scheduled_prediction_refresh, 'cron', hour=9, minute=0)
+    scheduler.start()
+    print("[Scheduler] Background jobs started.")
+
+    yield
+
+    # Shutdown
+    scheduler.shutdown()
+
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="NBA Predictor API",
+    description="Electron shell için local REST API",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Önceki günlerin sonuçlarını otomatik doldur (yerel master_games.parquet'ten)
     try:
         from prediction_tracker import fill_results
         filled = fill_results()

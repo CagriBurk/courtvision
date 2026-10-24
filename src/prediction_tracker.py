@@ -15,13 +15,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-ROOT         = Path(__file__).parent.parent
-PRED_DIR     = ROOT / "data" / "predictions"
-PRED_LOG     = PRED_DIR / "predictions_log.parquet"
+ROOT = Path(__file__).parent.parent
+PRED_DIR = ROOT / "data" / "predictions"
+PRED_LOG = PRED_DIR / "predictions_log.parquet"
 PRED_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIDENCE_WEIGHTS = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
@@ -48,20 +47,22 @@ def save_predictions(predictions: list[dict]) -> pd.DataFrame:
 
         prob_home = float(p.get("prob_home", 0.5))
 
-        rows.append({
-            "game_id":          str(p["game_id"]),
-            "date":             str(p.get("date", pd.Timestamp.today().date())),
-            "home_team":        str(p.get("home_team_abbr", "")),
-            "home_team_id":     str(p.get("home_team_id", "")),
-            "away_team":        str(p.get("away_team_abbr", "")),
-            "away_team_id":     str(p.get("away_team_id", "")),
-            "prob_home":        round(prob_home, 4),
-            "prob_away":        round(1.0 - prob_home, 4),
-            "confidence":       conf,
-            "predicted_winner": "HOME" if prob_home >= 0.5 else "AWAY",
-            "actual_winner":    None,
-            "correct":          None,
-        })
+        rows.append(
+            {
+                "game_id": str(p["game_id"]),
+                "date": str(p.get("date", pd.Timestamp.today().date())),
+                "home_team": str(p.get("home_team_abbr", "")),
+                "home_team_id": str(p.get("home_team_id", "")),
+                "away_team": str(p.get("away_team_abbr", "")),
+                "away_team_id": str(p.get("away_team_id", "")),
+                "prob_home": round(prob_home, 4),
+                "prob_away": round(1.0 - prob_home, 4),
+                "confidence": conf,
+                "predicted_winner": "HOME" if prob_home >= 0.5 else "AWAY",
+                "actual_winner": None,
+                "correct": None,
+            }
+        )
 
     new_df = pd.DataFrame(rows)
 
@@ -117,12 +118,12 @@ def fill_results(master: pd.DataFrame | None = None) -> pd.DataFrame:
         if match.empty:
             continue  # Sonuç henüz yok (maç oynanmamış)
 
-        target = int(match.iloc[0]["target"])   # 1=ev kazandı, 0=deplasman
+        target = int(match.iloc[0]["target"])  # 1=ev kazandı, 0=deplasman
         actual = "HOME" if target == 1 else "AWAY"
         correct = actual == row["predicted_winner"]
 
         log.at[idx, "actual_winner"] = actual
-        log.at[idx, "correct"]       = correct
+        log.at[idx, "correct"] = correct
         filled_count += 1
 
     log.to_parquet(PRED_LOG, index=False)
@@ -153,14 +154,16 @@ def get_stats() -> dict:
         return _empty_stats()
 
     # Ham accuracy
-    total   = len(completed)
+    total = len(completed)
     correct = int(completed["correct"].sum())
 
     # Ağırlıklı accuracy
     weights = completed["confidence"].map(CONFIDENCE_WEIGHTS).fillna(1)
     weighted_correct = (completed["correct"].astype(float) * weights).sum()
-    weighted_total   = weights.sum()
-    weighted_acc = float(weighted_correct / weighted_total) if weighted_total > 0 else 0.0
+    weighted_total = weights.sum()
+    weighted_acc = (
+        float(weighted_correct / weighted_total) if weighted_total > 0 else 0.0
+    )
 
     # Tier bazlı
     by_tier = {}
@@ -169,8 +172,8 @@ def get_stats() -> dict:
         t = len(tier_rows)
         c = int(tier_rows["correct"].sum()) if t > 0 else 0
         by_tier[tier] = {
-            "correct":  c,
-            "total":    t,
+            "correct": c,
+            "total": t,
             "accuracy": round(c / t * 100, 1) if t > 0 else None,
         }
 
@@ -178,18 +181,18 @@ def get_stats() -> dict:
     completed["date"] = pd.to_datetime(completed["date"])
     cutoff = pd.Timestamp.today() - pd.Timedelta(days=7)
     recent = completed[completed["date"] >= cutoff]
-    r_total   = len(recent)
+    r_total = len(recent)
     r_correct = int(recent["correct"].sum()) if r_total > 0 else 0
 
     return {
-        "total":             total,
-        "correct":           correct,
-        "raw_accuracy":      round(correct / total * 100, 1),
+        "total": total,
+        "correct": correct,
+        "raw_accuracy": round(correct / total * 100, 1),
         "weighted_accuracy": round(weighted_acc * 100, 1),
-        "by_tier":           by_tier,
+        "by_tier": by_tier,
         "last_7_days": {
-            "total":    r_total,
-            "correct":  r_correct,
+            "total": r_total,
+            "correct": r_correct,
             "accuracy": round(r_correct / r_total * 100, 1) if r_total > 0 else None,
         },
     }
@@ -222,6 +225,7 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
 
     # Son days_back gün için LeagueGameLog çek (2025-26 current season)
     from datetime import date, timedelta
+
     cutoff = date.today() - timedelta(days=days_back)
 
     try:
@@ -257,11 +261,11 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
         gid = str(row["game_id"])
         if gid not in game_results:
             continue
-        target = game_results[gid]   # 1=ev kazandı, 0=dep kazandı
-        actual  = "HOME" if target == 1 else "AWAY"
+        target = game_results[gid]  # 1=ev kazandı, 0=dep kazandı
+        actual = "HOME" if target == 1 else "AWAY"
         correct = actual == row["predicted_winner"]
         log.at[idx, "actual_winner"] = actual
-        log.at[idx, "correct"]       = correct
+        log.at[idx, "correct"] = correct
         filled_count += 1
 
     if filled_count > 0:
@@ -275,9 +279,14 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
 
 def _empty_stats() -> dict:
     return {
-        "total": 0, "correct": 0,
-        "raw_accuracy": None, "weighted_accuracy": None,
-        "by_tier": {t: {"correct": 0, "total": 0, "accuracy": None} for t in ("HIGH", "MEDIUM", "LOW")},
+        "total": 0,
+        "correct": 0,
+        "raw_accuracy": None,
+        "weighted_accuracy": None,
+        "by_tier": {
+            t: {"correct": 0, "total": 0, "accuracy": None}
+            for t in ("HIGH", "MEDIUM", "LOW")
+        },
         "last_7_days": {"total": 0, "correct": 0, "accuracy": None},
     }
 
@@ -299,7 +308,7 @@ if __name__ == "__main__":
         print(f"  Ham Accuracy : {stats['raw_accuracy']}%")
         print(f"  Ağırlıklı    : {stats['weighted_accuracy']}%")
         print(f"  Son 7 gün    : {stats['last_7_days']['accuracy']}%")
-        print(f"\n  Tier bazlı:")
+        print("\n  Tier bazlı:")
         for tier, d in stats["by_tier"].items():
             acc = f"{d['accuracy']}%" if d["accuracy"] is not None else "—"
             print(f"    {tier:6s}: {d['correct']}/{d['total']} ({acc})")

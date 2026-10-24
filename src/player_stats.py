@@ -33,6 +33,10 @@ INJURY_CACHE = CACHE_DIR / "injuries.json"
 CACHE_TTL_HOURS = 6   # 6 saat geçerliliği
 CURRENT_SEASON  = "2025-26"
 
+# Bellek içi önbellek (in-memory cache)
+_PLAYER_STATS_MEM_CACHE: pd.DataFrame | None = None
+_PLAYER_STATS_MEM_MTIME: float = 0.0
+
 # ESPN tam takım adı → NBA kısaltma eşlemesi
 TEAM_NAME_TO_ABR: dict[str, str] = {
     "Atlanta Hawks":           "ATL",
@@ -81,8 +85,15 @@ def _cache_fresh(path: Path) -> bool:
 
 def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
     """Mevcut sezon oyuncu istatistiklerini döndürür (cache'li)."""
+    global _PLAYER_STATS_MEM_CACHE, _PLAYER_STATS_MEM_MTIME
+
     if not force_refresh and _cache_fresh(PLAYER_CACHE):
-        return pd.read_parquet(PLAYER_CACHE)
+        mtime = PLAYER_CACHE.stat().st_mtime
+        if _PLAYER_STATS_MEM_CACHE is not None and mtime == _PLAYER_STATS_MEM_MTIME:
+            return _PLAYER_STATS_MEM_CACHE.copy()
+        _PLAYER_STATS_MEM_CACHE = pd.read_parquet(PLAYER_CACHE)
+        _PLAYER_STATS_MEM_MTIME = mtime
+        return _PLAYER_STATS_MEM_CACHE.copy()
 
     if not NBA_API_AVAILABLE:
         return pd.DataFrame()
@@ -99,21 +110,44 @@ def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
         df = stats.get_data_frames()[0]
         df.to_parquet(PLAYER_CACHE, index=False)
         print(f"[player_stats] {len(df)} oyuncu kaydedildi → {PLAYER_CACHE}")
+
+        # Update in-memory cache after a successful fetch
+        _PLAYER_STATS_MEM_CACHE = df.copy()
+        _PLAYER_STATS_MEM_MTIME = PLAYER_CACHE.stat().st_mtime
+
         return df
     except Exception as e:
         print(f"[player_stats] LeagueDashPlayerStats hatası: {e}")
         if PLAYER_CACHE.exists():
-            return pd.read_parquet(PLAYER_CACHE)   # eski cache ile devam
+            mtime = PLAYER_CACHE.stat().st_mtime
+            if _PLAYER_STATS_MEM_CACHE is not None and mtime == _PLAYER_STATS_MEM_MTIME:
+                return _PLAYER_STATS_MEM_CACHE.copy()
+            _PLAYER_STATS_MEM_CACHE = pd.read_parquet(PLAYER_CACHE)
+            _PLAYER_STATS_MEM_MTIME = mtime
+            return _PLAYER_STATS_MEM_CACHE.copy()
         return pd.DataFrame()
 
 
-def get_team_top_players(team_id: int, n: int = 5) -> list[dict]:
+def get_team_top_players(team_id: int, n: int = 5, df: pd.DataFrame = None) -> list[dict]:
     """Takımın impact score'a göre top n oyuncusunu döndürür."""
-    df = get_player_stats()
-    if df.empty:
+    if df is None:
+        df = get_player_stats()
+    if df is None or df.empty:
         return []
 
-    team_df = df[df["TEAM_ID"] == team_id].copy()
+    # Ensure TEAM_ID is handled correctly (handles both string and int depending on cache schema)
+    # The dataframe might contain TEAM_ID as string or int depending on how it was saved.
+    # To be safe, compare after casting if needed, or cast the given team_id to match.
+    # The easiest is to use pandas indexing, assuming TEAM_ID exists.
+    # For now, let's keep the exact original logic but we'll fall back to casting if it's string.
+    try:
+        team_df = df[df["TEAM_ID"] == team_id].copy()
+    except KeyError:
+        return []
+
+    # In some datasets, TEAM_ID is string
+    if team_df.empty and "TEAM_ID" in df.columns:
+        team_df = df[df["TEAM_ID"] == str(team_id)].copy()
     if team_df.empty:
         return []
 

@@ -4,13 +4,14 @@ A machine learning-powered desktop app for predicting NBA game outcomes. The XGB
 
 ## Features
 
-- **Daily predictions** — Win/loss probabilities automatically computed each morning for today's games
-- **Why wins analysis** — Key factors based on recent form, fatigue, head-to-head history, and stat differentials
-- **Team detail modal** — Last 15 games trend chart, rolling Pts / Opp / FG% stats
-- **Injury tracking** — Out and Doubtful players surfaced automatically per game
-- **Game notifications** — Desktop alert 30 minutes before tip-off for watched games
-- **Prediction history** — Accuracy tracking broken down by confidence tier
-- **Model metrics** — OOF Accuracy 66.7%, AUC-ROC 0.715, Brier Score 0.210
+- **Daily predictions** — Win/loss probabilities automatically computed each morning for today's games.
+- **Why wins analysis** — Key factors based on recent form, fatigue, head-to-head history, and stat differentials.
+- **Advanced Predictive Stats** — Calculates advanced modeling statistics such as Elo, True Shooting %, and Oliver's Four Factors of Basketball Success (eFG%, TOV%, ORB%, FTr).
+- **Team detail modal** — Last 15 games trend chart, rolling Pts / Opp / FG% stats.
+- **Injury tracking** — Out and Doubtful players surfaced automatically per game.
+- **Game notifications** — Desktop alert 30 minutes before tip-off for watched games.
+- **Prediction history** — Accuracy tracking broken down by confidence tier.
+- **Model metrics** — Robust model evaluation including Accuracy, AUC-ROC, Log-Loss, and Brier Score tracking.
 
 ## Model Performance
 
@@ -21,7 +22,7 @@ A machine learning-powered desktop app for predicting NBA game outcomes. The XGB
 | Log-Loss | **0.608** |
 | Brier Score | **0.210** |
 | Baseline (always pick home) | 57.9% |
-| Features | 236 |
+| Features | 244 (including Four Factors) |
 | Training data | 26,332 games (2000–2026) |
 | Method | XGBoost + Optuna (150 trials) + 5-Fold TimeSeriesSplit |
 
@@ -72,7 +73,7 @@ Produces `dist/CourtVision-1.0.0-setup.exe`.
 
 ## Project Structure
 
-```
+```text
 ├── src/
 │   ├── 01_build_master.py       # Merge raw data sources
 │   ├── 02_build_features.py     # Rolling feature engineering

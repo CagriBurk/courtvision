@@ -241,6 +241,39 @@ def compute_team_rolling_features(team_log: pd.DataFrame) -> pd.DataFrame:
             grp["ts_pct_L10"] = np.nan
             grp["ts_pct_L5"]  = np.nan
 
+        # ---- Four Factors (Offensive and Defensive) ----
+        # eFG% = (FGM + 0.5 * 3PM) / FGA
+        # TOV% = TOV / (FGA + 0.44 * FTA + TOV)
+        # ORB% = OREB / (OREB + Opp DREB) (Simplified to OREB / (OREB + DREB) for rolling as approx)
+        # FTr = FTA / FGA
+        if all(c in grp.columns for c in ["fgm", "fg3m", "fga", "tov", "fta", "oreb", "dreb"]):
+            fgm_s = grp["fgm"].shift(1)
+            fg3m_s = grp["fg3m"].shift(1)
+            fga_s = grp["fga"].shift(1)
+            tov_s = grp["tov"].shift(1)
+            fta_s = grp["fta"].shift(1)
+            oreb_s = grp["oreb"].shift(1)
+            dreb_s = grp["dreb"].shift(1)
+
+            efg_raw = (fgm_s + 0.5 * fg3m_s) / fga_s.where(fga_s > 0, np.nan)
+            tov_pct_raw = tov_s / (fga_s + 0.44 * fta_s + tov_s).where((fga_s + 0.44 * fta_s + tov_s) > 0, np.nan)
+            # Simplified ORB% approximation since we don't have opponent DREB perfectly aligned in this view easily
+            # We use OREB / (OREB + DREB) as a proxy for offensive rebounding effort relative to total own rebounds
+            orb_pct_raw = oreb_s / (oreb_s + dreb_s).where((oreb_s + dreb_s) > 0, np.nan)
+            ftr_raw = fta_s / fga_s.where(fga_s > 0, np.nan)
+
+            for w in [5, 10]:
+                grp[f"efg_pct_L{w}"] = efg_raw.rolling(w, min_periods=1).mean()
+                grp[f"tov_pct_L{w}"] = tov_pct_raw.rolling(w, min_periods=1).mean()
+                grp[f"orb_pct_L{w}"] = orb_pct_raw.rolling(w, min_periods=1).mean()
+                grp[f"ftr_L{w}"] = ftr_raw.rolling(w, min_periods=1).mean()
+        else:
+            for w in [5, 10]:
+                grp[f"efg_pct_L{w}"] = np.nan
+                grp[f"tov_pct_L{w}"] = np.nan
+                grp[f"orb_pct_L{w}"] = np.nan
+                grp[f"ftr_L{w}"] = np.nan
+
         # ---- Tutarlılık (std) ----
         for col in ["won", "pts_scored", "plus_minus"]:
             if col in grp.columns:
@@ -346,6 +379,8 @@ TEAM_FEATURE_COLS = (
     + [f"{col}_trend" for col in ["won", "plus_minus", "pts_scored", "pts_allowed"]]
     # Yeni: Verimlilik metrikleri
     + ["ts_pct_L10", "ts_pct_L5", "off_eff_L10", "off_eff_L5"]
+    # Four Factors
+    + [f"{metric}_L{w}" for metric in ["efg_pct", "tov_pct", "orb_pct", "ftr"] for w in [5, 10]]
     # Yeni: Tutarlılık (std)
     + ["won_std_L10", "pts_scored_std_L10", "plus_minus_std_L10"]
     # Elo/SRS/Rakip kalitesi (elo_srs.py'den gelir)
@@ -427,6 +462,15 @@ def pivot_to_game_level(
         ("ts_pct_L10",       "diff_ts_pct_L10"),
         ("off_eff_L10",      "diff_off_eff_L10"),
         ("won_std_L10",      "diff_won_std_L10"),
+        # Four Factors
+        ("efg_pct_L5",       "diff_efg_pct_L5"),
+        ("efg_pct_L10",      "diff_efg_pct_L10"),
+        ("tov_pct_L5",       "diff_tov_pct_L5"),
+        ("tov_pct_L10",      "diff_tov_pct_L10"),
+        ("orb_pct_L5",       "diff_orb_pct_L5"),
+        ("orb_pct_L10",      "diff_orb_pct_L10"),
+        ("ftr_L5",           "diff_ftr_L5"),
+        ("ftr_L10",          "diff_ftr_L10"),
         # Elo/SRS/opp_quality diff'leri
         ("srs_L10",          "diff_srs_L10"),
         ("srs_L5",           "diff_srs_L5"),
@@ -493,6 +537,10 @@ def compute_live_team_features(
     df["blk"]         = _col("BLK")
     df["tov"]         = _col("TOV")
     df["pf"]          = _col("PF")
+    df["fgm"]         = _col("FGM")
+    df["fg3m"]        = _col("FG3M")
+    df["oreb"]        = _col("OREB")
+    df["dreb"]        = _col("DREB")
 
     feats = {}
     n = len(df)
@@ -567,6 +615,41 @@ def compute_live_team_features(
     ts_vals = pts_arr.values / np.where(denom.values > 0, denom.values, np.nan)
     feats["ts_pct_L10"] = float(np.nanmean(ts_vals)) if len(ts_vals) > 0 else 0.55
     feats["ts_pct_L5"]  = float(np.nanmean(ts_vals[-5:])) if len(ts_vals) >= 1 else 0.55
+
+    # ---- Four Factors (Offensive) ----
+    if all(c in df.columns for c in ["fgm", "fg3m", "fga", "tov", "fta", "oreb", "dreb"]):
+        fgm_arr = df["fgm"].tail(10)
+        fg3m_arr = df["fg3m"].tail(10)
+        fga_arr = df["fga"].tail(10)
+        tov_arr = df["tov"].tail(10)
+        fta_arr = df["fta"].tail(10)
+        oreb_arr = df["oreb"].tail(10)
+        dreb_arr = df["dreb"].tail(10)
+
+        efg_vals = (fgm_arr.values + 0.5 * fg3m_arr.values) / np.where(fga_arr.values > 0, fga_arr.values, np.nan)
+        tov_denom = fga_arr.values + 0.44 * fta_arr.values + tov_arr.values
+        tov_pct_vals = tov_arr.values / np.where(tov_denom > 0, tov_denom, np.nan)
+        orb_denom = oreb_arr.values + dreb_arr.values
+        orb_pct_vals = oreb_arr.values / np.where(orb_denom > 0, orb_denom, np.nan)
+        ftr_vals = fta_arr.values / np.where(fga_arr.values > 0, fga_arr.values, np.nan)
+
+        feats["efg_pct_L10"] = float(np.nanmean(efg_vals)) if len(efg_vals) > 0 else np.nan
+        feats["efg_pct_L5"]  = float(np.nanmean(efg_vals[-5:])) if len(efg_vals) >= 1 else np.nan
+
+        feats["tov_pct_L10"] = float(np.nanmean(tov_pct_vals)) if len(tov_pct_vals) > 0 else np.nan
+        feats["tov_pct_L5"]  = float(np.nanmean(tov_pct_vals[-5:])) if len(tov_pct_vals) >= 1 else np.nan
+
+        feats["orb_pct_L10"] = float(np.nanmean(orb_pct_vals)) if len(orb_pct_vals) > 0 else np.nan
+        feats["orb_pct_L5"]  = float(np.nanmean(orb_pct_vals[-5:])) if len(orb_pct_vals) >= 1 else np.nan
+
+        feats["ftr_L10"] = float(np.nanmean(ftr_vals)) if len(ftr_vals) > 0 else np.nan
+        feats["ftr_L5"]  = float(np.nanmean(ftr_vals[-5:])) if len(ftr_vals) >= 1 else np.nan
+    else:
+        for w in [5, 10]:
+            feats[f"efg_pct_L{w}"] = np.nan
+            feats[f"tov_pct_L{w}"] = np.nan
+            feats[f"orb_pct_L{w}"] = np.nan
+            feats[f"ftr_L{w}"] = np.nan
 
     # ---- Tutarlılık (std) ----
     for col in ["won", "pts_scored", "plus_minus"]:

@@ -393,8 +393,11 @@ async def today_games():
             if row.get('away_team_id') is not None:
                 team_ids.add(str(int(row['away_team_id'])))
 
+        from src.player_stats import get_player_stats
+        cached_player_stats_df = get_player_stats()
+
         for tid in team_ids:
-            players = get_team_top_players(int(tid))
+            players = get_team_top_players(int(tid), df=cached_player_stats_df)
             if players:
                 top_players[tid] = players
     except Exception as e:

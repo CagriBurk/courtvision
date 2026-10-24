@@ -33,6 +33,10 @@ INJURY_CACHE = CACHE_DIR / "injuries.json"
 CACHE_TTL_HOURS = 6   # 6 saat geçerliliği
 CURRENT_SEASON  = "2025-26"
 
+# Bellek içi önbellek (in-memory cache)
+_PLAYER_STATS_MEM_CACHE: pd.DataFrame | None = None
+_PLAYER_STATS_MEM_MTIME: float = 0.0
+
 # ESPN tam takım adı → NBA kısaltma eşlemesi
 TEAM_NAME_TO_ABR: dict[str, str] = {
     "Atlanta Hawks":           "ATL",
@@ -81,8 +85,15 @@ def _cache_fresh(path: Path) -> bool:
 
 def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
     """Mevcut sezon oyuncu istatistiklerini döndürür (cache'li)."""
+    global _PLAYER_STATS_MEM_CACHE, _PLAYER_STATS_MEM_MTIME
+
     if not force_refresh and _cache_fresh(PLAYER_CACHE):
-        return pd.read_parquet(PLAYER_CACHE)
+        mtime = PLAYER_CACHE.stat().st_mtime
+        if _PLAYER_STATS_MEM_CACHE is not None and mtime == _PLAYER_STATS_MEM_MTIME:
+            return _PLAYER_STATS_MEM_CACHE.copy()
+        _PLAYER_STATS_MEM_CACHE = pd.read_parquet(PLAYER_CACHE)
+        _PLAYER_STATS_MEM_MTIME = mtime
+        return _PLAYER_STATS_MEM_CACHE.copy()
 
     if not NBA_API_AVAILABLE:
         return pd.DataFrame()
@@ -99,11 +110,21 @@ def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
         df = stats.get_data_frames()[0]
         df.to_parquet(PLAYER_CACHE, index=False)
         print(f"[player_stats] {len(df)} oyuncu kaydedildi → {PLAYER_CACHE}")
+
+        # Update in-memory cache after a successful fetch
+        _PLAYER_STATS_MEM_CACHE = df.copy()
+        _PLAYER_STATS_MEM_MTIME = PLAYER_CACHE.stat().st_mtime
+
         return df
     except Exception as e:
         print(f"[player_stats] LeagueDashPlayerStats hatası: {e}")
         if PLAYER_CACHE.exists():
-            return pd.read_parquet(PLAYER_CACHE)   # eski cache ile devam
+            mtime = PLAYER_CACHE.stat().st_mtime
+            if _PLAYER_STATS_MEM_CACHE is not None and mtime == _PLAYER_STATS_MEM_MTIME:
+                return _PLAYER_STATS_MEM_CACHE.copy()
+            _PLAYER_STATS_MEM_CACHE = pd.read_parquet(PLAYER_CACHE)
+            _PLAYER_STATS_MEM_MTIME = mtime
+            return _PLAYER_STATS_MEM_CACHE.copy()
         return pd.DataFrame()
 
 

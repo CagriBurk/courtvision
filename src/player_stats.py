@@ -107,13 +107,26 @@ def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_team_top_players(team_id: int, n: int = 5) -> list[dict]:
+def get_team_top_players(team_id: int, n: int = 5, df: pd.DataFrame = None) -> list[dict]:
     """Takımın impact score'a göre top n oyuncusunu döndürür."""
-    df = get_player_stats()
-    if df.empty:
+    if df is None:
+        df = get_player_stats()
+    if df is None or df.empty:
         return []
 
-    team_df = df[df["TEAM_ID"] == team_id].copy()
+    # Ensure TEAM_ID is handled correctly (handles both string and int depending on cache schema)
+    # The dataframe might contain TEAM_ID as string or int depending on how it was saved.
+    # To be safe, compare after casting if needed, or cast the given team_id to match.
+    # The easiest is to use pandas indexing, assuming TEAM_ID exists.
+    # For now, let's keep the exact original logic but we'll fall back to casting if it's string.
+    try:
+        team_df = df[df["TEAM_ID"] == team_id].copy()
+    except KeyError:
+        return []
+
+    # In some datasets, TEAM_ID is string
+    if team_df.empty and "TEAM_ID" in df.columns:
+        team_df = df[df["TEAM_ID"] == str(team_id)].copy()
     if team_df.empty:
         return []
 

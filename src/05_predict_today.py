@@ -18,7 +18,7 @@ import argparse
 import json
 import pickle
 import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import numpy as np

@@ -9,6 +9,7 @@ or directly: python src/api_server.py
 import json
 import pickle
 import subprocess
+import asyncio
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -442,18 +443,27 @@ async def get_top_players(team_id: int, n: int = 5):
 @app.post("/api/refresh-predictions")
 async def refresh_predictions():
     """Updates predictions by fetching fresh data from nba_api."""
-    import subprocess
     script = ROOT / "src" / "05_predict_today.py"
     try:
-        result = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True, text=True, timeout=300,
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(script),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             cwd=str(ROOT),
         )
-        if result.returncode == 0:
+
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            raise Exception("TimeoutExpired: Command timed out after 300 seconds")
+
+        if process.returncode == 0:
             return {"success": True, "message": "Predictions updated."}
         else:
-            return {"success": False, "error": result.stderr[-1000:]}
+            stderr_text = stderr.decode('utf-8', errors='replace')
+            return {"success": False, "error": stderr_text[-1000:]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

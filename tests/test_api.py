@@ -85,6 +85,11 @@ def test_today_games(mocker):
     ])
 
     mocker.patch('pathlib.Path.exists', return_value=True)
+
+    mocker.patch('player_stats.get_injuries', return_value={})
+    mocker.patch('player_stats.get_team_top_players', return_value=[])
+
+
     def fake_read_parquet(path, columns=None, **kwargs):
         if "team_game_log" in str(path):
             return log_mock

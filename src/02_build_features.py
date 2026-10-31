@@ -60,6 +60,16 @@ def main():
     features = features[features["season_id"].astype(str) != first_season].reset_index(drop=True)
     print(f"  → Sezon {first_season} çıkarıldı: {before_drop} → {len(features)}")
 
+    # Tamamen boş feature'ları çıkar (ör. Kaggle olmadan hiç dolmayan
+    # pts_paint, qdiff gibi istatistikler). XGBoost bunlarda bölme yapamaz ama
+    # colsample ile seçilen feature'ların bir kısmını boşa harcarlar.
+    meta = {"game_id", "game_date", "season_id", "season_type", "target",
+            "team_id_home", "team_abbreviation_home", "team_id_away", "team_abbreviation_away"}
+    empty = [c for c in features.columns if c not in meta and features[c].isna().all()]
+    if empty:
+        features = features.drop(columns=empty)
+        print(f"  → Tamamen boş {len(empty)} feature çıkarıldı")
+
     # Son sıralama
     features = features.sort_values("game_date").reset_index(drop=True)
 

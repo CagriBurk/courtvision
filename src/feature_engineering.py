@@ -1,8 +1,8 @@
 """
 feature_engineering.py
 -----------------------
-Both 02_build_features.py (offline training) and api_server.py (live prediction)
-import shared module.
+Shared feature pipeline: 02_build_features.py (offline training) and
+05_predict_today.py (live prediction) both go through build_feature_matrix().
 
 All functions follow shift(1) rule: no feature uses current match
 stats — only past match data.
@@ -12,6 +12,8 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+
+from elo_srs import compute_elo, compute_opponent_quality, compute_srs
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +60,9 @@ def build_team_game_log(master: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in master.iterrows():
         base = {c: row[c] for c in id_cols if c in row.index}
+        # Upcoming games (live prediction) have no result yet
+        target = row.get("target")
+        home_won = int(target) if pd.notna(target) else np.nan
 
         # --- Ev sahibi satırı ---
         h = base.copy()
@@ -65,7 +70,7 @@ def build_team_game_log(master: pd.DataFrame) -> pd.DataFrame:
         h["team_abbr"]    = row.get("team_abbreviation_home")
         h["opponent_id"]  = row.get("team_id_away")
         h["is_home"]      = 1
-        h["won"]          = int(row.get("target", 0))
+        h["won"]          = home_won
         h["pts_scored"]   = row.get("pts_home")
         h["pts_allowed"]  = row.get("pts_away")
         for col, (hcol, _) in stat_map.items():
@@ -87,7 +92,7 @@ def build_team_game_log(master: pd.DataFrame) -> pd.DataFrame:
         a["team_abbr"]    = row.get("team_abbreviation_away")
         a["opponent_id"]  = row.get("team_id_home")
         a["is_home"]      = 0
-        a["won"]          = 1 - int(row.get("target", 0))
+        a["won"]          = 1 - home_won
         a["pts_scored"]   = row.get("pts_away")
         a["pts_allowed"]  = row.get("pts_home")
         for col, (_, acol) in stat_map.items():
@@ -161,25 +166,25 @@ def compute_team_rolling_features(team_log: pd.DataFrame) -> pd.DataFrame:
         grp["is_back_to_back"] = (grp["days_since_last_game"] == 1).astype(int)
 
         # Son 5 ve 7 takvim günündeki maç sayısı (mevcut maç hariç)
+        # dates is sorted → count of past dates in [d - N days, d)
         dates = grp["game_date"].values
-        g5, g7 = [], []
-        for d in dates:
-            d_ts = pd.Timestamp(d)
-            past = grp["game_date"]
-            g5.append(int(((past < d_ts) & (past >= d_ts - pd.Timedelta(days=5))).sum()))
-            g7.append(int(((past < d_ts) & (past >= d_ts - pd.Timedelta(days=7))).sum()))
-        grp["games_in_last_5_days"] = g5
-        grp["games_in_last_7_days"] = g7
+        left = np.searchsorted(dates, dates, side="left")
+        for n in (5, 7):
+            start = np.searchsorted(dates, dates - np.timedelta64(n, "D"), side="left")
+            grp[f"games_in_last_{n}_days"] = left - start
 
         grp["prev_game_was_home"] = grp["is_home"].shift(1).fillna(0.5)
 
         # ---- Rolling istatistikler ----
+        # Built in one go to avoid fragmenting the frame with ~60 inserts
+        rolling_cols = {}
         for col in ROLLING_STAT_COLS:
             if col not in grp.columns:
                 continue
-            shifted = grp[col].shift(1)
+            shifted = pd.to_numeric(grp[col], errors="coerce").shift(1)
             for w in ROLLING_WINDOWS:
-                grp[f"{col}_L{w}"] = shifted.rolling(w, min_periods=1).mean()
+                rolling_cols[f"{col}_L{w}"] = shifted.rolling(w, min_periods=1).mean()
+        grp = pd.concat([grp, pd.DataFrame(rolling_cols, index=grp.index)], axis=1)
 
         # Türetilen rolling metrikler
         pace_raw = grp["pts_scored"] + grp["pts_allowed"]
@@ -329,8 +334,15 @@ def compute_h2h_features(master: pd.DataFrame) -> pd.DataFrame:
                 "h2h_pts_diff_L5":      0.0,
             })
         else:
-            wins      = [g["home_won"]   for g in hist]
-            pts_diffs = [g["pts_diff"]   for g in hist]
+            # Normalize every past game to the CURRENT home team's perspective
+            wins = [
+                g["home_won"] if g["home_team_id"] == h_tid else 1 - g["home_won"]
+                for g in hist
+            ]
+            pts_diffs = [
+                g["pts_diff"] if g["home_team_id"] == h_tid else -g["pts_diff"]
+                for g in hist
+            ]
 
             h2h_records.append({
                 "game_id":              row["game_id"],
@@ -341,14 +353,14 @@ def compute_h2h_features(master: pd.DataFrame) -> pd.DataFrame:
                 "h2h_pts_diff_L5":      np.mean(pts_diffs[-5:]),
             })
 
-        # Bu maçı sözlüğe ekle — sonraki maçlar için geçmiş olacak
-        # Perspektifi her zaman MEVCUT EV SAHİBİ takımı açısından normalize et
-        home_won_this = int(row.get("target", 0))
+        # Bu maçı sözlüğe ekle — sonraki maçlar için geçmiş olacak.
+        # Kayıt bu maçın ev sahibi perspektifinden tutulur; okurken normalize edilir.
+        if pd.isna(row.get("target")):
+            continue  # upcoming game, no result yet
+        home_won_this = int(row["target"])
         pts_diff_this = (
             (row.get("pts_home", 0) or 0) - (row.get("pts_away", 0) or 0)
         )
-        # Eğer bu maçta h_tid deplasman ise işareti çevir
-        # (pair_history perspektif her zaman alfabetik küçük team_id = "home" olarak normalize)
         pair_history[key].append({
             "home_won": home_won_this,
             "pts_diff": pts_diff_this,
@@ -489,184 +501,37 @@ def pivot_to_game_level(
 
 
 # ---------------------------------------------------------------------------
-# 5. Live tahmin için tek takımın rolling feature'larını hesapla
+# 5. Full pipeline: master table → game-level feature matrix
 # ---------------------------------------------------------------------------
-def compute_live_team_features(
-    team_game_log: pd.DataFrame,
-    today: pd.Timestamp | None = None,
-) -> dict:
+def build_feature_matrix(
+    master: pd.DataFrame,
+    rolling_since: pd.Timestamp | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    nba_api TeamGameLog çıktısından (kronolojik sırada) bir sonraki maç
-    için feature dict üretir.
+    Single entry point used by BOTH training (02_build_features.py) and
+    live prediction (05_predict_today.py), so the two can never drift apart.
 
-    team_game_log: GAME_DATE, WL, PTS, FGM, FGA, FG_PCT, FG3M, FG3A,
-                   FG3_PCT, FTM, FTA, FT_PCT, OREB, DREB, REB, AST,
-                   STL, BLK, TOV, PF, PLUS_MINUS, MATCHUP içeren DF.
-    today: tahmin tarihi (varsayılan: bugün).
+    Live prediction appends upcoming games to `master` with target=NaN and
+    no box score; shift(1) guarantees their features only use past games.
+
+    rolling_since: compute team rolling features only on games from this
+        date on (speed-up for live prediction). Must reach back at least one
+        full season so L10 windows and season-to-date stats are unaffected.
+        Elo and H2H always use the full history.
+
+    Returns (game-level features, team log with rolling features).
     """
-    if today is None:
-        today = pd.Timestamp.today().normalize()
+    master = master.copy()
+    master["game_date"] = pd.to_datetime(master["game_date"])
 
-    df = team_game_log.copy()
-    df["game_date"] = pd.to_datetime(df["GAME_DATE"], format="mixed")
-    df = df.sort_values("game_date").reset_index(drop=True)
+    recent = master if rolling_since is None else master[master["game_date"] >= rolling_since]
+    team_log = build_team_game_log(recent)
+    team_log_feats = compute_team_rolling_features(team_log)
+    team_log_feats = compute_opponent_quality(team_log_feats)
+    team_log_feats = compute_srs(team_log_feats)
 
-    if df.empty:
-        return {}
+    elo_df = compute_elo(master)
+    master_with_h2h = compute_h2h_features(master).merge(elo_df, on="game_id", how="left")
 
-    def _col(api_col, default=np.nan):
-        """API sütunu yoksa NaN serisi döndür."""
-        # Büyük/küçük harf varyantlarını dene
-        for c in [api_col, api_col.lower(), api_col.upper()]:
-            if c in df.columns:
-                return pd.to_numeric(df[c], errors="coerce")
-        return pd.Series(default, index=df.index, dtype=float)
-
-    df["is_home"]     = df["MATCHUP"].apply(lambda m: 0 if "@" in m else 1)
-    df["won"]         = (df["WL"] == "W").astype(int)
-    df["pts_scored"]  = _col("PTS")
-    df["plus_minus"]  = _col("PLUS_MINUS")
-    df["fg_pct"]      = _col("FG_PCT")
-    df["fg3_pct"]     = _col("FG3_PCT")
-    df["ft_pct"]      = _col("FT_PCT")
-    df["fga"]         = _col("FGA")
-    df["fta"]         = _col("FTA")
-    df["reb"]         = _col("REB")
-    df["ast"]         = _col("AST")
-    df["stl"]         = _col("STL")
-    df["blk"]         = _col("BLK")
-    df["tov"]         = _col("TOV")
-    df["pf"]          = _col("PF")
-    df["fgm"]         = _col("FGM")
-    df["fg3m"]        = _col("FG3M")
-    df["oreb"]        = _col("OREB")
-    df["dreb"]        = _col("DREB")
-
-    feats = {}
-    n = len(df)
-    last_date = df["game_date"].iloc[-1]
-
-    # Yorgunluk
-    feats["days_since_last_game"] = (today - last_date).days
-    feats["is_back_to_back"]      = int(feats["days_since_last_game"] == 1)
-    feats["games_in_last_5_days"] = int(
-        ((df["game_date"] > today - pd.Timedelta(days=5)) & (df["game_date"] < today)).sum()
-    )
-    feats["games_in_last_7_days"] = int(
-        ((df["game_date"] > today - pd.Timedelta(days=7)) & (df["game_date"] < today)).sum()
-    )
-    feats["prev_game_was_home"] = int(df["is_home"].iloc[-1])
-
-    # Rolling (tüm geçmiş = "önceki maçlar", mevcut maç yok)
-    for col in ["won", "pts_scored", "plus_minus", "fg_pct", "fg3_pct",
-                "ft_pct", "reb", "ast", "stl", "blk", "tov", "pf"]:
-        for w in [5, 10]:
-            tail = df[col].tail(w)
-            feats[f"{col}_L{w}"] = float(tail.mean()) if len(tail) > 0 else 0.5
-
-    feats["point_diff_L5"]  = float(df["plus_minus"].tail(5).mean())
-    feats["point_diff_L10"] = float(df["plus_minus"].tail(10).mean())
-    feats["pace_L5"]        = float((df["pts_scored"] * 2).tail(5).mean())  # yaklaşık pace
-    feats["pace_L10"]       = float((df["pts_scored"] * 2).tail(10).mean())
-
-    # Ev/deplasman win rate
-    home_games = df[df["is_home"] == 1]["won"].tail(10)
-    away_games = df[df["is_home"] == 0]["won"].tail(10)
-    feats["home_win_rate_L10"] = float(home_games.mean()) if len(home_games) > 0 else 0.5
-    feats["away_win_rate_L10"] = float(away_games.mean()) if len(away_games) > 0 else 0.5
-
-    # Sezon-to-date
-    feats["season_game_num"]  = n
-    feats["season_win_pct"]   = float(df["won"].mean())
-    feats["season_pd_before"] = float(df["plus_minus"].sum())
-
-    # Streak
-    current = 0
-    for w in reversed(df["won"].tolist()):
-        if current == 0:
-            current = 1 if w == 1 else -1
-        elif current > 0 and w == 1:
-            current += 1
-        elif current < 0 and w == 0:
-            current -= 1
-        else:
-            break
-    feats["current_streak"] = current
-
-    # ---- Sezon fazı ----
-    feats["season_pct_complete"] = n / 82.0
-
-    # ---- L3 window ----
-    for col in ["won", "pts_scored", "plus_minus", "fg_pct", "fg3_pct"]:
-        if col in df.columns:
-            feats[f"{col}_L3"] = float(df[col].tail(3).mean())
-
-    # ---- Form trend (L3 - L10) ----
-    for col in ["won", "plus_minus", "pts_scored", "pts_allowed"]:
-        l3  = feats.get(f"{col}_L3",  feats.get(f"{col}_L5",  0.0))
-        l10 = feats.get(f"{col}_L10", feats.get(f"{col}_L5",  0.0))
-        feats[f"{col}_trend"] = l3 - l10
-
-    # ---- True Shooting % ----
-    pts_arr = df["pts_scored"].tail(10)
-    fga_arr = df["fga"].tail(10)
-    fta_arr = df["fta"].tail(10)
-    denom   = 2 * (fga_arr + 0.44 * fta_arr)
-    ts_vals = pts_arr.values / np.where(denom.values > 0, denom.values, np.nan)
-    feats["ts_pct_L10"] = float(np.nanmean(ts_vals)) if len(ts_vals) > 0 else 0.55
-    feats["ts_pct_L5"]  = float(np.nanmean(ts_vals[-5:])) if len(ts_vals) >= 1 else 0.55
-
-    # ---- Four Factors (Offensive) ----
-    if all(c in df.columns for c in ["fgm", "fg3m", "fga", "tov", "fta", "oreb", "dreb"]):
-        fgm_arr = df["fgm"].tail(10)
-        fg3m_arr = df["fg3m"].tail(10)
-        fga_arr = df["fga"].tail(10)
-        tov_arr = df["tov"].tail(10)
-        fta_arr = df["fta"].tail(10)
-        oreb_arr = df["oreb"].tail(10)
-        dreb_arr = df["dreb"].tail(10)
-
-        efg_vals = (fgm_arr.values + 0.5 * fg3m_arr.values) / np.where(fga_arr.values > 0, fga_arr.values, np.nan)
-        tov_denom = fga_arr.values + 0.44 * fta_arr.values + tov_arr.values
-        tov_pct_vals = tov_arr.values / np.where(tov_denom > 0, tov_denom, np.nan)
-        orb_denom = oreb_arr.values + dreb_arr.values
-        orb_pct_vals = oreb_arr.values / np.where(orb_denom > 0, orb_denom, np.nan)
-        ftr_vals = fta_arr.values / np.where(fga_arr.values > 0, fga_arr.values, np.nan)
-
-        feats["efg_pct_L10"] = float(np.nanmean(efg_vals)) if len(efg_vals) > 0 else np.nan
-        feats["efg_pct_L5"]  = float(np.nanmean(efg_vals[-5:])) if len(efg_vals) >= 1 else np.nan
-
-        feats["tov_pct_L10"] = float(np.nanmean(tov_pct_vals)) if len(tov_pct_vals) > 0 else np.nan
-        feats["tov_pct_L5"]  = float(np.nanmean(tov_pct_vals[-5:])) if len(tov_pct_vals) >= 1 else np.nan
-
-        feats["orb_pct_L10"] = float(np.nanmean(orb_pct_vals)) if len(orb_pct_vals) > 0 else np.nan
-        feats["orb_pct_L5"]  = float(np.nanmean(orb_pct_vals[-5:])) if len(orb_pct_vals) >= 1 else np.nan
-
-        feats["ftr_L10"] = float(np.nanmean(ftr_vals)) if len(ftr_vals) > 0 else np.nan
-        feats["ftr_L5"]  = float(np.nanmean(ftr_vals[-5:])) if len(ftr_vals) >= 1 else np.nan
-    else:
-        for w in [5, 10]:
-            feats[f"efg_pct_L{w}"] = np.nan
-            feats[f"tov_pct_L{w}"] = np.nan
-            feats[f"orb_pct_L{w}"] = np.nan
-            feats[f"ftr_L{w}"] = np.nan
-
-    # ---- Tutarlılık (std) ----
-    for col in ["won", "pts_scored", "plus_minus"]:
-        if col in df.columns:
-            vals = df[col].tail(10)
-            feats[f"{col}_std_L10"] = float(vals.std()) if len(vals) >= 3 else 0.0
-
-    # ---- Hücum etkinliği ----
-    if "pts_allowed" in df.columns:
-        pts_s   = df["pts_scored"].tail(10)
-        pts_a   = df["pts_allowed"].tail(10)
-        total   = pts_s + pts_a
-        off_raw = pts_s / total.where(total > 0, np.nan)
-        feats["off_eff_L10"] = float(off_raw.mean())
-        feats["off_eff_L5"]  = float(off_raw.tail(5).mean())
-    else:
-        feats["off_eff_L10"] = 0.5
-        feats["off_eff_L5"]  = 0.5
-
-    return feats
+    features = pivot_to_game_level(team_log_feats, master_with_h2h)
+    return features, team_log_feats

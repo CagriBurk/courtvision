@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { LayoutDashboard, History, BarChart2, Settings } from 'lucide-react'
 import { NavPage } from '../types'
 import { NBA_LOGO } from '../data/mockData'
+import { useModelMetrics } from '../hooks/useModelMetrics'
 
 interface SidebarProps {
   activePage: NavPage
@@ -17,6 +18,7 @@ const navItems = [
 
 export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
   const [logoError, setLogoError] = useState(false)
+  const { data: metrics } = useModelMetrics()
 
   return (
     <aside className="w-52 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
@@ -63,7 +65,7 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
       {/* Footer */}
       <div className="p-4 border-t border-slate-800">
         <p className="text-slate-600 text-xs">v1.0.0</p>
-        <p className="text-slate-700 text-xs">236 feature</p>
+        <p className="text-slate-700 text-xs">{metrics?.featureCount ?? '—'} feature</p>
       </div>
     </aside>
   )

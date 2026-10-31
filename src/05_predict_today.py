@@ -1,12 +1,17 @@
 """
 05_predict_today.py
 -------------------
-Automatically fetches today's NBA games from nba_api,
-calculates rolling features and generates predictions.
+Fetches today's NBA games from nba_api and predicts them.
+
+Live features are produced by the SAME pipeline as training
+(feature_engineering.build_feature_matrix): today's games are appended to
+the master table as rows without a result, so shift(1) makes their
+features depend only on games already played.
 
 Output:
   data/live/today_schedule.json
   data/live/live_features.parquet
+  data/processed/master_games.parquet  (current season refreshed)
   reports/predictions_YYYY-MM-DD.html
 
 Usage:
@@ -17,219 +22,136 @@ Usage:
 import argparse
 import json
 import pickle
-import time
 from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-try:
-    from nba_api.stats.endpoints import teamgamelog
-    NBA_API_AVAILABLE = True
-except ImportError:
-    NBA_API_AVAILABLE = False
-from nba_data_client import fetch_today_schedule
-
-from feature_engineering import compute_live_team_features
-from elo_srs import get_current_elo
+from feature_engineering import build_feature_matrix
+from nba_data_client import NBA_API_AVAILABLE, fetch_season_wide, fetch_today_schedule
 from prediction_tracker import save_predictions, fill_results
+from season import current_season, season_id, season_start_year
 
 # ---------------------------------------------------------------------------
 ROOT        = Path(__file__).parent.parent
 MODELS_DIR  = ROOT / "models"
 PROC_DIR    = ROOT / "data" / "processed"
+CACHE_DIR   = ROOT / "data" / "api_cache"
 LIVE_DIR    = ROOT / "data" / "live"
 REPORTS_DIR = ROOT / "reports"
 LIVE_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-SLEEP_SEC       = 0.7
-CURRENT_SEASON  = "2025-26"
-MIN_GAMES_NEEDED = 5  # if fewer games, add previous season
+
+def _normalize_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """Same type rules as 01_build_master (pyarrow rejects mixed types)."""
+    df = df.copy()
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    for col in ["game_id", "team_id_home", "team_id_away", "season_id"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+    return df
 
 
 # ---------------------------------------------------------------------------
-# 2. Fetch team's recent games (current season + previous season if necessary)
+# 1. Refresh the current season in the master table
 # ---------------------------------------------------------------------------
-def fetch_team_history(team_id: int) -> pd.DataFrame:
-    """
-    First fetch the current season. If not enough games, supplement from the previous season
-    offline team_game_log.parquet'ten tamamla.
-    """
-    # Mevcut sezon
-    try:
-        gl = teamgamelog.TeamGameLog(
-            team_id=team_id,
-            season=CURRENT_SEASON,
-            season_type_all_star="Regular Season",
-            timeout=30,
-        )
-        time.sleep(SLEEP_SEC)
-        current = gl.get_data_frames()[0]
-    except Exception as e:
-        print(f"    [UYARI] {team_id} için mevcut sezon çekilemedi: {e}")
-        current = pd.DataFrame()
+def refresh_current_season(master: pd.DataFrame, season: str) -> pd.DataFrame:
+    """Re-fetch `season` with one LeagueGameLog call and upsert it into master."""
+    fresh = fetch_season_wide(season)
+    if fresh.empty:
+        print(f"  [UYARI] {season} çekilemedi, mevcut master kullanılıyor.")
+        return master
 
-    if len(current) >= 20:
-        return current
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    fresh.to_parquet(CACHE_DIR / f"season_{season}.parquet", index=False)
 
-    # Yetersizse önceki sezondan offline veriden tamamla
-    log_path = PROC_DIR / "team_game_log.parquet"
-    if log_path.exists():
-        offline = pd.read_parquet(log_path)
-        offline = offline[offline["team_id"] == str(team_id)].copy()
-        if not offline.empty:
-            # Last 20 games from offline → convert to nba_api format
-            offline = offline.sort_values("game_date").tail(20)
-            # Simple conversion: offline columns → API column names
-            bridge = pd.DataFrame()
-            bridge["GAME_DATE"]   = offline["game_date"].astype(str)
-            bridge["WL"]          = offline["won"].map({1: "W", 0: "L"})
-            bridge["PTS"]         = offline["pts_scored"]
-            bridge["FGM"]         = offline.get("fgm", np.nan)
-            bridge["FGA"]         = offline.get("fga", np.nan)
-            bridge["FG_PCT"]      = offline.get("fg_pct", np.nan)
-            bridge["FG3M"]        = offline.get("fg3m", np.nan)
-            bridge["FG3A"]        = offline.get("fg3a", np.nan)
-            bridge["FG3_PCT"]     = offline.get("fg3_pct", np.nan)
-            bridge["FTM"]         = offline.get("ftm", np.nan)
-            bridge["FTA"]         = offline.get("fta", np.nan)
-            bridge["FT_PCT"]      = offline.get("ft_pct", np.nan)
-            bridge["OREB"]        = offline.get("oreb", np.nan)
-            bridge["DREB"]        = offline.get("dreb", np.nan)
-            bridge["REB"]         = offline.get("reb", np.nan)
-            bridge["AST"]         = offline.get("ast", np.nan)
-            bridge["STL"]         = offline.get("stl", np.nan)
-            bridge["BLK"]         = offline.get("blk", np.nan)
-            bridge["TOV"]         = offline.get("tov", np.nan)
-            bridge["PF"]          = offline.get("pf", np.nan)
-            bridge["PLUS_MINUS"]  = offline.get("plus_minus", np.nan)
-            bridge["MATCHUP"]     = offline["is_home"].map({1: "HOME vs.", 0: "@ AWAY"})
-
-            combined = pd.concat([bridge, current], ignore_index=True)
-            return combined
-
-    return current
+    fresh = _normalize_ids(fresh)
+    master = master[~master["game_id"].isin(fresh["game_id"])]
+    combined = pd.concat([master, fresh], ignore_index=True)
+    combined = combined.sort_values("game_date").reset_index(drop=True)
+    combined.to_parquet(PROC_DIR / "master_games.parquet", index=False)
+    print(f"  → Master güncellendi: {len(combined)} maç (son: {combined['game_date'].max().date()})")
+    return combined
 
 
 # ---------------------------------------------------------------------------
-# 3. H2H feature'ları (offline master tablodan)
+# 2. Live features through the training pipeline
 # ---------------------------------------------------------------------------
-def compute_h2h_live(home_team_id: int, away_team_id: int) -> dict:
-    master_path = PROC_DIR / "master_games.parquet"
-    if not master_path.exists():
-        return {"h2h_n_games": 0, "h2h_home_win_rate": 0.5,
-                "h2h_home_win_rate_L5": 0.5, "h2h_pts_diff_mean": 0.0, "h2h_pts_diff_L5": 0.0}
+def build_pending_rows(games: list[dict], target_date: date) -> pd.DataFrame:
+    """Today's games in master (wide) format, without a result."""
+    sid = season_id(season_start_year(target_date))
+    return pd.DataFrame([
+        {
+            "game_id":                str(g["game_id"]),
+            "game_date":              pd.Timestamp(target_date),
+            "season_id":              sid,
+            "season_type":            "Regular Season",
+            "team_id_home":           str(g["home_team_id"]),
+            "team_abbreviation_home": g["home_team_abbr"],
+            "team_name_home":         g["home_team_name"],
+            "team_id_away":           str(g["away_team_id"]),
+            "team_abbreviation_away": g["away_team_abbr"],
+            "team_name_away":         g["away_team_name"],
+            "target":                 np.nan,
+        }
+        for g in games
+    ])
 
-    master = pd.read_parquet(master_path)
-    h_tid  = str(home_team_id)
-    a_tid  = str(away_team_id)
 
-    prior = master[
-        ((master["team_id_home"].astype(str) == h_tid) & (master["team_id_away"].astype(str) == a_tid)) |
-        ((master["team_id_home"].astype(str) == a_tid) & (master["team_id_away"].astype(str) == h_tid))
-    ].copy()
+def compute_live_features(master: pd.DataFrame, games: list[dict], target_date: date) -> pd.DataFrame:
+    """Game-level feature rows for `games`, indexed by game_id."""
+    target_ts = pd.Timestamp(target_date)
+    history = master[master["game_date"] < target_ts]
+    pending = build_pending_rows(games, target_date)
 
-    if prior.empty:
-        return {"h2h_n_games": 0, "h2h_home_win_rate": 0.5,
-                "h2h_home_win_rate_L5": 0.5, "h2h_pts_diff_mean": 0.0, "h2h_pts_diff_L5": 0.0}
-
-    wins, diffs = [], []
-    for _, row in prior.iterrows():
-        if str(row["team_id_home"]) == h_tid:
-            wins.append(int(row.get("target", 0)))
-            diffs.append((row.get("pts_home", 0) or 0) - (row.get("pts_away", 0) or 0))
-        else:
-            wins.append(1 - int(row.get("target", 0)))
-            diffs.append((row.get("pts_away", 0) or 0) - (row.get("pts_home", 0) or 0))
-
-    return {
-        "h2h_n_games":          len(wins),
-        "h2h_home_win_rate":    float(np.mean(wins)),
-        "h2h_home_win_rate_L5": float(np.mean(wins[-5:])),
-        "h2h_pts_diff_mean":    float(np.mean(diffs)),
-        "h2h_pts_diff_L5":      float(np.mean(diffs[-5:])),
-    }
+    # Rolling windows only need the previous season onwards (L10 + season-to-date);
+    # Elo and H2H still use the full history.
+    rolling_since = pd.Timestamp(f"{season_start_year(target_date) - 1}-08-01")
+    features, _ = build_feature_matrix(
+        pd.concat([history, pending], ignore_index=True),
+        rolling_since=rolling_since,
+    )
+    return features[features["game_id"].isin(pending["game_id"])].set_index("game_id")
 
 
 # ---------------------------------------------------------------------------
-# 4. Feature vektörü oluştur ve tahmin yap
+# 3. Predict
 # ---------------------------------------------------------------------------
-def predict_games(games: list[dict], model, feature_columns: list, current_elo: dict) -> list[dict]:
+def recent_form(master: pd.DataFrame, team_id: str, before: date, n: int = 10) -> list[int]:
+    """Last n results (1=W, 0=L) of a team before `before`, oldest first."""
+    games = master[
+        ((master["team_id_home"] == team_id) | (master["team_id_away"] == team_id))
+        & (master["game_date"] < pd.Timestamp(before))
+        & master["target"].notna()
+    ].sort_values("game_date").tail(n)
+    is_home = games["team_id_home"] == team_id
+    won = games["target"].where(is_home, 1 - games["target"])
+    return [int(w) for w in won]
+
+
+def _num(v):
+    """numpy scalar → plain float (None if missing) for JSON/parquet output."""
+    return None if pd.isna(v) else float(v)
+
+
+def _int(v):
+    return None if pd.isna(v) else int(v)
+
+
+def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
+                  feature_columns: list, target_date: date) -> list[dict]:
     predictions = []
 
     for g in games:
-        h_id = g["home_team_id"]
-        a_id = g["away_team_id"]
-        print(f"  {g['home_team_abbr']} vs {g['away_team_abbr']} ...", end=" ")
+        gid = str(g["game_id"])
+        if gid not in live_feats.index:
+            print(f"  [UYARI] {g['home_team_abbr']} vs {g['away_team_abbr']}: feature üretilemedi, atlanıyor.")
+            continue
+        row = live_feats.loc[gid]
 
-        h_log = fetch_team_history(h_id)
-        a_log = fetch_team_history(a_id)
-
-        today_ts = pd.Timestamp.today().normalize()
-        home_feats = compute_live_team_features(h_log, today_ts) if not h_log.empty else {}
-        away_feats = compute_live_team_features(a_log, today_ts) if not a_log.empty else {}
-
-        h2h_feats = compute_h2h_live(h_id, a_id)
-
-        # Game-level feature dict
-        game_feats = {}
-        for k, v in home_feats.items():
-            game_feats[f"home_{k}"] = v
-        for k, v in away_feats.items():
-            game_feats[f"away_{k}"] = v
-        game_feats.update(h2h_feats)
-        game_feats["is_playoff"] = 0
-
-        # Elo feature'ları — get_current_elo(master)'dan gelen dayscel değerler
-        h_elo = current_elo.get(str(h_id), 1500.0)
-        a_elo = current_elo.get(str(a_id), 1500.0)
-        e_home = 1.0 / (1.0 + 10.0 ** ((a_elo - h_elo) / 400.0))
-        game_feats["elo_home"]     = round(h_elo, 2)
-        game_feats["elo_away"]     = round(a_elo, 2)
-        game_feats["elo_diff"]     = round(h_elo - a_elo, 2)
-        game_feats["elo_win_prob"] = round(e_home, 4)
-
-        # Diff feature'lar
-        diff_pairs = [
-            ("home_won_L5",          "away_won_L5",          "diff_win_rate_L5"),
-            ("home_won_L10",         "away_won_L10",         "diff_win_rate_L10"),
-            ("home_pts_scored_L5",   "away_pts_scored_L5",   "diff_pts_scored_L5"),
-            ("home_pts_scored_L10",  "away_pts_scored_L10",  "diff_pts_scored_L10"),
-            ("home_pts_allowed_L5",  "away_pts_allowed_L5",  "diff_pts_allowed_L5"),
-            ("home_pts_allowed_L10", "away_pts_allowed_L10", "diff_pts_allowed_L10"),
-            ("home_plus_minus_L5",   "away_plus_minus_L5",   "diff_plus_minus_L5"),
-            ("home_plus_minus_L10",  "away_plus_minus_L10",  "diff_plus_minus_L10"),
-            ("home_fg_pct_L10",      "away_fg_pct_L10",      "diff_fg_pct_L10"),
-            ("home_fg3_pct_L10",     "away_fg3_pct_L10",     "diff_fg3_pct_L10"),
-            ("home_reb_L5",          "away_reb_L5",           "diff_reb_L5"),
-            ("home_ast_L5",          "away_ast_L5",           "diff_ast_L5"),
-            ("home_tov_L5",          "away_tov_L5",           "diff_tov_L5"),
-            ("home_pts_fb_L5",       "away_pts_fb_L5",        "diff_pts_fb_L5"),
-            ("home_pts_paint_L5",    "away_pts_paint_L5",     "diff_pts_paint_L5"),
-            ("home_season_win_pct",  "away_season_win_pct",   "diff_season_win_pct"),
-            ("home_season_pd_before","away_season_pd_before", "diff_season_pd"),
-            ("home_current_streak",  "away_current_streak",   "diff_streak"),
-            ("home_is_back_to_back", "away_is_back_to_back",  "fatigue_diff_b2b"),
-            ("home_days_since_last_game","away_days_since_last_game","diff_rest_days"),
-            # SRS / opp_quality — compute_live_team_features'ta yoksa NaN olur,
-            # XGBoost native NaN handling ile tolere eder
-            ("home_srs_L10",         "away_srs_L10",         "diff_srs_L10"),
-            ("home_srs_L5",          "away_srs_L5",          "diff_srs_L5"),
-            ("home_opp_quality_L10", "away_opp_quality_L10", "diff_opp_quality_L10"),
-            ("home_opp_quality_L5",  "away_opp_quality_L5",  "diff_opp_quality_L5"),
-        ]
-        for hk, ak, dk in diff_pairs:
-            game_feats[dk] = game_feats.get(hk, 0) - game_feats.get(ak, 0)
-
-        # Feature vektörünü eğitim sırasına hizala
-        X_live = pd.DataFrame([game_feats])
-        for col in feature_columns:
-            if col not in X_live.columns:
-                X_live[col] = np.nan
-        X_live = X_live[feature_columns]
-
+        X_live = row.reindex(feature_columns).to_frame().T.astype(float)
         prob_home = float(model.predict_proba(X_live)[0][1])
         prob_away = 1.0 - prob_home
         winner    = "HOME" if prob_home > 0.5 else "AWAY"
@@ -238,43 +160,44 @@ def predict_games(games: list[dict], model, feature_columns: list, current_elo: 
 
         result = {
             **g,
-            "prob_home":       prob_home,
-            "prob_away":       prob_away,
+            "date":             str(target_date),
+            "prob_home":        prob_home,
+            "prob_away":        prob_away,
             "predicted_winner": winner,
-            "confidence":      conf,
+            "confidence":       conf,
             # Form özeti
-            "home_form_L5":    home_feats.get("won_L5", None),
-            "home_form_L10":   home_feats.get("won_L10", None),
-            "home_b2b":        home_feats.get("is_back_to_back", 0),
-            "home_rest":       home_feats.get("days_since_last_game", None),
-            "home_streak":     home_feats.get("current_streak", 0),
-            "away_form_L5":    away_feats.get("won_L5", None),
-            "away_form_L10":   away_feats.get("won_L10", None),
-            "away_b2b":        away_feats.get("is_back_to_back", 0),
-            "away_rest":       away_feats.get("days_since_last_game", None),
-            "away_streak":     away_feats.get("current_streak", 0),
-            "h2h_games":       h2h_feats.get("h2h_n_games", 0),
-            "h2h_home_wr":     h2h_feats.get("h2h_home_win_rate", 0.5),
-            "h2h_pts_diff":    h2h_feats.get("h2h_pts_diff_mean", 0),
+            "home_form_L5":     _num(row.get("home_won_L5")),
+            "home_form_L10":    _num(row.get("home_won_L10")),
+            "home_b2b":         _int(row.get("home_is_back_to_back")) or 0,
+            "home_rest":        _int(row.get("home_days_since_last_game")),
+            "home_streak":      _int(row.get("home_current_streak")) or 0,
+            "away_form_L5":     _num(row.get("away_won_L5")),
+            "away_form_L10":    _num(row.get("away_won_L10")),
+            "away_b2b":         _int(row.get("away_is_back_to_back")) or 0,
+            "away_rest":        _int(row.get("away_days_since_last_game")),
+            "away_streak":      _int(row.get("away_current_streak")) or 0,
+            "h2h_games":        _int(row.get("h2h_n_games")) or 0,
+            "h2h_home_wr":      _num(row.get("h2h_home_win_rate")),
+            "h2h_pts_diff":     _num(row.get("h2h_pts_diff_mean")),
             # Key diff features — UI faktörleri + ileride analiz için
-            "elo_diff":              game_feats.get("elo_diff", None),
-            "elo_home":              game_feats.get("elo_home", None),
-            "elo_away":              game_feats.get("elo_away", None),
-            "diff_plus_minus_L10":   game_feats.get("diff_plus_minus_L10", None),
-            "diff_plus_minus_L5":    game_feats.get("diff_plus_minus_L5", None),
-            "diff_season_win_pct":   game_feats.get("diff_season_win_pct", None),
-            "diff_season_pd":        game_feats.get("diff_season_pd", None),
-            "diff_srs_L10":          game_feats.get("diff_srs_L10", None),
-            "fatigue_diff_b2b":      game_feats.get("fatigue_diff_b2b", None),
+            "elo_diff":            _num(row.get("elo_diff")),
+            "elo_home":            _num(row.get("elo_home")),
+            "elo_away":            _num(row.get("elo_away")),
+            "diff_plus_minus_L10": _num(row.get("diff_plus_minus_L10")),
+            "diff_plus_minus_L5":  _num(row.get("diff_plus_minus_L5")),
+            "diff_season_win_pct": _num(row.get("diff_season_win_pct")),
+            "diff_season_pd":      _num(row.get("diff_season_pd")),
+            "diff_srs_L10":        _num(row.get("diff_srs_L10")),
+            "fatigue_diff_b2b":    _num(row.get("fatigue_diff_b2b")),
         }
-        print(f"{g['home_team_abbr']} %{prob_home:.1%} | {g['away_team_abbr']} %{prob_away:.1%} [{conf}]")
+        print(f"  {g['home_team_abbr']} %{prob_home:.1%} | {g['away_team_abbr']} %{prob_away:.1%} [{conf}]")
         predictions.append(result)
 
     return predictions
 
 
 # ---------------------------------------------------------------------------
-# 5. HTML raporu üret
+# 4. HTML raporu üret
 # ---------------------------------------------------------------------------
 def _streak_str(s: int) -> str:
     if s > 0: return f"G{s}"
@@ -380,6 +303,16 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
     return html
 
 
+def write_live_meta(target_date: date, n_games: int) -> None:
+    """data/live/meta.json — the API uses it to decide if predictions are fresh."""
+    meta = {
+        "date":         str(target_date),
+        "generated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "n_games":      n_games,
+    }
+    (LIVE_DIR / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
@@ -402,41 +335,45 @@ def main(target_date: date | None = None):
     model.set_params(device="cpu")  # inference CPU'da, CUDA device mismatch uyarısını kapat
     print(f"Model loaded. Feature count: {len(feature_columns)}\n")
 
-    # Güncel Elo değerlerini hesapla
-    print("Calculating Elo rating (from all historical games)...")
-    master = pd.read_parquet(PROC_DIR / "master_games.parquet")
-    master["game_date"] = pd.to_datetime(master["game_date"])
-    current_elo = get_current_elo(master)
-    print(f"  → {len(current_elo)} takım için Elo hazır\n")
+    # Master tablo + güncel sezon
+    master = _normalize_ids(pd.read_parquet(PROC_DIR / "master_games.parquet"))
+    season = current_season(target_date)
+    print(f"Güncel sezon yenileniyor ({season})...")
+    master = refresh_current_season(master, season)
 
     # Maç programı
     games = fetch_today_schedule(target_date)
+    live_path = LIVE_DIR / "live_features.parquet"
     if not games:
         print("No games today or all games have finished.")
+        pd.DataFrame().to_parquet(live_path, index=False)
+        write_live_meta(target_date, 0)
+        fill_results(master)
         return
 
     schedule_path = LIVE_DIR / "today_schedule.json"
     schedule_path.write_text(json.dumps(games, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Tahminler
-    print("\nTahminler hesaplanıyor...")
-    predictions = predict_games(games, model, feature_columns, current_elo)
+    # Feature'lar (eğitimle aynı pipeline) + tahminler
+    print("\nFeature'lar hesaplanıyor (eğitim pipeline'ı)...")
+    live_feats = compute_live_features(master, games, target_date)
 
-    # Live features kaydet
-    live_df = pd.DataFrame(predictions)
-    live_df.to_parquet(LIVE_DIR / "live_features.parquet", index=False)
+    print("\nTahminler hesaplanıyor...")
+    predictions = predict_games(games, live_feats, model, feature_columns, target_date)
+    for p in predictions:
+        p["home_form_seq"] = recent_form(master, str(p["home_team_id"]), target_date)
+        p["away_form_seq"] = recent_form(master, str(p["away_team_id"]), target_date)
+
+    pd.DataFrame(predictions).to_parquet(live_path, index=False)
+    write_live_meta(target_date, len(predictions))
 
     # HTML raporu
     report_html = generate_report(predictions, target_date)
     report_path = REPORTS_DIR / f"predictions_{target_date.strftime('%Y-%m-%d')}.html"
     report_path.write_text(report_html, encoding="utf-8")
 
-    # Tahminleri kaydet
-    for p in predictions:
-        p["date"] = str(target_date)
+    # Tahminleri kaydet, önceki günlerin sonuçlarını doldur
     save_predictions(predictions)
-
-    # Önceki dayslerin sonuçlarını doldur (master tablodan)
     fill_results(master)
 
     print(f"\n{'='*60}")
@@ -447,7 +384,7 @@ def main(target_date: date | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default=None,
-                        help="Prediction date (YYYY-MM-DD), varsayılan: budays")
+                        help="Prediction date (YYYY-MM-DD), varsayılan: bugün")
     args = parser.parse_args()
 
     target = date.fromisoformat(args.date) if args.date else None

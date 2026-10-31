@@ -1,34 +1,12 @@
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts'
-import { useQuery } from '@tanstack/react-query'
-import { mockFeatureImportance, mockFoldMetrics } from '../data/historyData'
-
-interface FeatureItem {
-  feature: string
-  importance: number
-}
-interface FoldItem {
-  fold: number
-  accuracy: number
-  auc: number
-  logLoss: number
-}
+import { formatDateTr, useModelMetrics } from '../hooks/useModelMetrics'
 
 interface ModelMetricsProps {
   apiBase?: string
 }
 
-// Gerçek değerler — 04_evaluate_model.py, 236 feature, 2026-02-22
-const DEFAULT_METRICS = [
-  {
-    label: 'Accuracy (OOF)',
-    value: '66.7%',
-    sub: 'Baseline: 57.9% (+8.8pp)',
-    color: 'text-emerald-400'
-  },
-  { label: 'AUC-ROC', value: '0.715', sub: 'İyi ayrım gücü', color: 'text-blue-400' },
-  { label: 'Log-Loss', value: '0.608', sub: 'Baseline: 0.679', color: 'text-amber-400' },
-  { label: 'Brier Score', value: '0.210', sub: 'Kalibrasyon kalitesi', color: 'text-purple-400' }
-]
+const fmt = (v: number | null | undefined, digits: number, suffix = '') =>
+  v == null ? '—' : `${v.toFixed(digits)}${suffix}`
 
 const IMPORTANCE_COLORS = [
   '#3b82f6',
@@ -43,37 +21,66 @@ const IMPORTANCE_COLORS = [
   '#fca5a5'
 ]
 
-export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: ModelMetricsProps) {
-  const { data } = useQuery({
-    queryKey: ['modelMetrics', apiBase],
-    queryFn: async () => {
-      const res = await fetch(`${apiBase}/api/model/metrics`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res.json()
-    },
-    retry: 1
-  })
+export default function ModelMetrics({ apiBase }: ModelMetricsProps) {
+  const { data } = useModelMetrics(apiBase)
 
-  const features: FeatureItem[] =
-    data?.featureImportance?.length > 0 ? data.featureImportance : mockFeatureImportance
-  const folds: FoldItem[] = data?.foldMetrics?.length > 0 ? data.foldMetrics : mockFoldMetrics
-
+  const features = data?.featureImportance ?? []
+  const folds = data?.foldMetrics ?? []
   const sortedFeatures = [...features].sort((a, b) => b.importance - a.importance).slice(0, 15)
+  const avg = (key: 'accuracy' | 'auc' | 'logLoss') =>
+    folds.length ? folds.reduce((s, f) => s + f[key], 0) / folds.length : null
+
+  const lift =
+    data?.accuracy != null && data?.baselineAccuracy != null
+      ? data.accuracy - data.baselineAccuracy
+      : null
+  const metrics = [
+    {
+      label: 'Accuracy (OOF)',
+      value: fmt(data?.accuracy, 1, '%'),
+      sub:
+        lift != null
+          ? `Baseline: ${data?.baselineAccuracy}% (${lift >= 0 ? '+' : ''}${lift.toFixed(1)}pp)`
+          : 'Henüz değerlendirilmedi',
+      color: 'text-emerald-400'
+    },
+    { label: 'AUC-ROC', value: fmt(data?.aucRoc, 3), sub: 'Ayrım gücü', color: 'text-blue-400' },
+    { label: 'Log-Loss', value: fmt(data?.logLoss, 3), sub: 'Düşük = iyi', color: 'text-amber-400' },
+    {
+      label: 'Brier Score',
+      value: fmt(data?.brierScore, 3),
+      sub: 'Kalibrasyon kalitesi',
+      color: 'text-purple-400'
+    }
+  ]
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="border-b border-slate-800 px-6 py-4">
         <h1 className="text-white font-bold text-xl">Model Metrikleri</h1>
         <p className="text-slate-500 text-sm mt-0.5">
-          XGBoost · 236 feature · 26,332 maç · 5-Fold TimeSeriesSplit · En önemli:{' '}
-          <span className="text-blue-400">elo_diff</span>
+          XGBoost · {data?.featureCount ?? '—'} feature ·{' '}
+          {data?.dataPoints?.toLocaleString('tr-TR') ?? '—'} maç · 5-Fold TimeSeriesSplit
+          {sortedFeatures.length > 0 && (
+            <>
+              {' '}
+              · En önemli: <span className="text-blue-400">{sortedFeatures[0].feature}</span>
+            </>
+          )}
         </p>
       </div>
 
       <div className="p-6 space-y-6">
+        {!data?.evaluatedAt && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-amber-300 text-xs">
+            Değerlendirme metrikleri yok. Çalıştırın:{' '}
+            <code className="text-amber-200">python src/04_evaluate_model.py</code>
+          </div>
+        )}
+
         {/* Main metrics */}
         <div className="grid grid-cols-4 gap-3">
-          {DEFAULT_METRICS.map((m) => (
+          {metrics.map((m) => (
             <div
               key={m.label}
               className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50"
@@ -112,13 +119,11 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
             <div className="grid grid-cols-4 px-4 py-3 text-sm bg-slate-700/20 border-t border-slate-700/50">
               <span className="text-white font-bold">Ortalama</span>
               <span className="text-center text-emerald-400 font-bold">
-                {(folds.reduce((s, f) => s + f.accuracy, 0) / folds.length).toFixed(1)}%
+                {fmt(avg('accuracy'), 1, '%')}
               </span>
-              <span className="text-center text-blue-400 font-bold">
-                {(folds.reduce((s, f) => s + f.auc, 0) / folds.length).toFixed(3)}
-              </span>
+              <span className="text-center text-blue-400 font-bold">{fmt(avg('auc'), 3)}</span>
               <span className="text-center text-amber-400 font-bold">
-                {(folds.reduce((s, f) => s + f.logLoss, 0) / folds.length).toFixed(3)}
+                {fmt(avg('logLoss'), 3)}
               </span>
             </div>
           </div>
@@ -176,9 +181,21 @@ export default function ModelMetrics({ apiBase = 'http://127.0.0.1:8765' }: Mode
         {/* Training info */}
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Veri', value: '26,332 maç', sub: '2000–2026 Regular Season' },
-            { label: 'Eğitim Süresi', value: '~45 dk', sub: 'RTX 4050 6GB, 236 feature' },
-            { label: 'Optuna Sampler', value: 'TPESampler', sub: 'MedianPruner, n_trials=150' }
+            {
+              label: 'Veri',
+              value: `${data?.dataPoints?.toLocaleString('tr-TR') ?? '—'} maç`,
+              sub: `${data?.dateFrom?.slice(0, 4) ?? '—'}–${data?.dateTo?.slice(0, 4) ?? '—'} Regular Season`
+            },
+            {
+              label: 'Son Eğitim',
+              value: formatDateTr(data?.trainedAt),
+              sub: `${data?.featureCount ?? '—'} feature`
+            },
+            {
+              label: 'Optuna Sampler',
+              value: 'TPESampler',
+              sub: `MedianPruner, n_trials=${data?.nTrials ?? '—'}`
+            }
           ].map((item) => (
             <div
               key={item.label}

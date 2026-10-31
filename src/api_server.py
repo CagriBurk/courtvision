@@ -11,10 +11,10 @@ import pickle
 import subprocess
 import asyncio
 import sys
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -24,7 +24,6 @@ from fastapi.middleware.cors import CORSMiddleware
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
-from feature_engineering import compute_live_team_features
 
 # ---------------------------------------------------------------------------
 # Team color and logo mappings
@@ -99,45 +98,43 @@ def _load_model():
     return True
 
 
-def _run_predictions_if_stale() -> None:
-    """If live_features.parquet is missing or from yesterday, regenerate predictions."""
-    live_path = LIVE_DIR / "live_features.parquet"
-    try:
-        fresh = (
-            live_path.exists()
-            and pd.to_datetime(
-                pd.read_parquet(live_path, columns=["game_date"])["game_date"].max()
-            ).date() == date.today()
-        )
-    except Exception:
-        fresh = False
+_predictions_running = threading.Event()
 
-    if fresh:
+
+def _predictions_fresh() -> bool:
+    """True if 05_predict_today.py already ran for today (data/live/meta.json)."""
+    try:
+        meta = json.loads((LIVE_DIR / "meta.json").read_text(encoding="utf-8"))
+        return meta.get("date") == str(date.today())
+    except Exception:
+        return False
+
+
+def _run_predictions_if_stale() -> None:
+    """If today's predictions are missing, regenerate them (blocking)."""
+    if _predictions_fresh():
         print("[API] Today predictions are already up to date, skipping.")
         return
 
     print("[API] Predictions are old/missing — running 05_predict_today.py...")
-    script = ROOT / "src" / "05_predict_today.py"
-    result = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=str(ROOT),
-        capture_output=False,
-    )
-    if result.returncode != 0:
-        print(f"[API] predict_today error code: {result.returncode}")
-    else:
-        print("[API] Predictions updated.")
+    _predictions_running.set()
+    try:
+        script = ROOT / "src" / "05_predict_today.py"
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(ROOT),
+            capture_output=False,
+        )
+        if result.returncode != 0:
+            print(f"[API] predict_today error code: {result.returncode}")
+        else:
+            print("[API] Predictions updated.")
+    finally:
+        _predictions_running.clear()
 
 
-@app.on_event("startup")
-async def startup_event():
-    ok = _load_model()
-    if ok:
-        print(f"[API] Model loaded. {len(_feature_columns)} feature.")
-    else:
-        print("[API] Model not found. Run 03_train_model.py first.")
-
-    # Auto generate if predictions are not up to date
+def _startup_background_jobs() -> None:
+    """Slow startup work (network + pipeline), run off the event loop."""
     try:
         _run_predictions_if_stale()
     except Exception as e:
@@ -153,19 +150,34 @@ async def startup_event():
     except Exception as e:
         print(f"[API] fill_results skipped: {e}")
 
-    # Canlı sezon sonuçlarını doldur (nba_api — 2024+ maçlar)
+    # Canlı sezon sonuçlarını doldur (nba_api)
     try:
         from prediction_tracker import fill_results_live
         fill_results_live()
     except Exception as e:
-        print(f"[API] fill_results_live skipped: {e}")
+        print(f"[API] fill_results_live skipped: {e!r}")
 
-    # Sakatlık raporunu arka planda yenile (cache yoksa veya eskimişse)
+    # Sakatlık raporunu yenile (cache yoksa veya eskimişse)
     try:
         from player_stats import get_injuries
         get_injuries()   # cache varsa hızlı döner
     except Exception as e:
         print(f"[API] injuries cache skipped: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    ok = _load_model()
+    if ok:
+        print(f"[API] Model loaded. {len(_feature_columns)} feature.")
+    else:
+        print("[API] Model not found. Run 03_train_model.py first.")
+
+    # Don't block startup: the window opens right away and the frontend
+    # polls /api/today-games while "updating" is true.
+    if not _predictions_fresh():
+        _predictions_running.set()  # visible to the first request already
+    threading.Thread(target=_startup_background_jobs, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +206,11 @@ def _build_game_response(
 
     # Form dizileri — son 10 maç (1=G, 0=M), kronolojik sıralı
     def get_form(team_id: str) -> list[int]:
+        # Written by 05_predict_today.py from the freshly updated master table
+        side = 'home' if team_id == h_tid else 'away'
+        seq = row.get(f'{side}_form_seq')
+        if seq is not None:
+            return [int(w) for w in seq]
         if log is None or not team_id:
             return []
         tlog = log[log['team_id'] == team_id].sort_values('game_date').tail(10)
@@ -361,12 +378,15 @@ async def today_games():
     """Returns today prediction report — compatible with frontend Game interface."""
     live_path = LIVE_DIR / "live_features.parquet"
 
+    updating = _predictions_running.is_set()
+
     if not live_path.exists():
         return {
-            "date":    str(date.today()),
-            "games":   [],
-            "count":   0,
-            "message": "Predictions not run yet. Run 05_predict_today.py.",
+            "date":     str(date.today()),
+            "games":    [],
+            "count":    0,
+            "updating": updating,
+            "message":  "Predictions not run yet. Run 05_predict_today.py.",
         }
 
     df = pd.read_parquet(live_path)
@@ -383,7 +403,7 @@ async def today_games():
     injuries   = {}
     top_players: dict[str, list] = {}
     try:
-        from player_stats import get_injuries, get_team_top_players
+        from player_stats import get_injuries, get_player_stats, get_team_top_players
         injuries = get_injuries()
 
         # Her maç için her iki takımın top oyuncularını çek
@@ -394,7 +414,6 @@ async def today_games():
             if row.get('away_team_id') is not None:
                 team_ids.add(str(int(row['away_team_id'])))
 
-        from src.player_stats import get_player_stats
         cached_player_stats_df = get_player_stats()
 
         for tid in team_ids:
@@ -410,9 +429,10 @@ async def today_games():
     ]
 
     return {
-        "date":  str(date.today()),
-        "games": games,
-        "count": len(games),
+        "date":     str(date.today()),
+        "games":    games,
+        "count":    len(games),
+        "updating": updating,
     }
 
 
@@ -557,19 +577,40 @@ async def model_metrics():
         except Exception:
             pass
 
+    def _read_json(name: str) -> dict:
+        try:
+            return json.loads((MODELS_DIR / name).read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    # Written by 03_train_model.py / 04_evaluate_model.py
+    train = _read_json("train_meta.json")
+    ev    = _read_json("metrics.json")
+
+    def _pct(v):
+        return round(v * 100, 1) if v is not None else None
+
     return {
-        'accuracy':    66.7,
-        'aucRoc':      0.715,
-        'logLoss':     0.6085,
-        'brierScore':  0.2105,
-        'featureCount': len(_feature_columns) if _feature_columns else 236,
-        'dataPoints':  26332,
+        'accuracy':         _pct(ev.get('accuracy')),
+        'baselineAccuracy': _pct(ev.get('baseline_acc')),
+        'aucRoc':           ev.get('auc'),
+        'logLoss':          ev.get('logloss'),
+        'brierScore':       ev.get('brier'),
+        'featureCount':     len(_feature_columns) if _feature_columns else train.get('n_features'),
+        'dataPoints':       train.get('n_games'),
+        'nTrials':          train.get('n_trials'),
+        'dateFrom':         train.get('date_from'),
+        'dateTo':           train.get('date_to'),
+        'trainedAt':        train.get('trained_at'),
+        'evaluatedAt':      ev.get('evaluated_at'),
         'foldMetrics': [
-            {'fold': 1, 'accuracy': 66.9, 'auc': 0.705, 'logLoss': 0.6092},
-            {'fold': 2, 'accuracy': 69.0, 'auc': 0.737, 'logLoss': 0.5868},
-            {'fold': 3, 'accuracy': 67.1, 'auc': 0.724, 'logLoss': 0.6023},
-            {'fold': 4, 'accuracy': 65.3, 'auc': 0.703, 'logLoss': 0.6219},
-            {'fold': 5, 'accuracy': 64.9, 'auc': 0.705, 'logLoss': 0.6224},
+            {
+                'fold':     f['fold'],
+                'accuracy': _pct(f['accuracy']),
+                'auc':      round(f['auc'], 3),
+                'logLoss':  round(f['logloss'], 4),
+            }
+            for f in ev.get('folds', [])
         ],
         'featureImportance': feat_imp,
     }

@@ -15,20 +15,9 @@ Usage:
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from tqdm import tqdm
 
-from feature_engineering import (
-    build_team_game_log,
-    compute_team_rolling_features,
-    compute_h2h_features,
-    pivot_to_game_level,
-    TEAM_FEATURE_COLS,
-    ROLLING_STAT_COLS,
-    ROLLING_WINDOWS,
-)
-from elo_srs import compute_elo, compute_opponent_quality, compute_srs
+from feature_engineering import build_feature_matrix
 
 # ---------------------------------------------------------------------------
 ROOT     = Path(__file__).parent.parent
@@ -41,58 +30,28 @@ def main():
     print(f"{'='*60}\n")
 
     # ---- 1. Master tabloyu yükle ----
-    print("[1/5] loading master_games.parquet...")
+    print("[1/3] loading master_games.parquet...")
     master = pd.read_parquet(PROC_DIR / "master_games.parquet")
     master["game_date"] = pd.to_datetime(master["game_date"])
     print(f"  → {len(master)} maç, {master.shape[1]} sütun")
 
-    # ---- 2. Tall format (team game log) oluştur ----
-    print("[2/5] Team game log (tall format) oluşturuluyor...")
-    print("  Bu adım biraz zaman alabilir...")
-    team_log = build_team_game_log(master)
+    # ---- 2. Ortak pipeline (05_predict_today.py ile aynı kod) ----
+    print("[2/3] Feature matrix oluşturuluyor (rolling, Elo, SRS, H2H)...")
+    features, team_log_feats = build_feature_matrix(master)
+
     team_log_path = PROC_DIR / "team_game_log.parquet"
-    team_log.to_parquet(team_log_path, index=False)
-    print(f"  → {len(team_log)} satır ({team_log['team_id'].nunique()} takım)")
-    print(f"  → Saved: {team_log_path}")
+    team_log_feats.to_parquet(team_log_path, index=False)
+    print(f"  → Team log: {len(team_log_feats)} satır → {team_log_path}")
 
-    # ---- 3. Rolling feature'ları hesapla ----
-    print("[3/6] Calculating rolling features (groupby team)...")
-    team_log_feats = compute_team_rolling_features(team_log)
-    print(f"  → Rolling hesaplandı. Sütun sayısı: {team_log_feats.shape[1]}")
-
-    # ---- 3b. Elo rating hesapla ----
-    print("  [3b] Elo rating hesaplanıyor...")
-    elo_df = compute_elo(master)
-    print(f"  → Elo: {len(elo_df)} maç, örnek: home_elo={elo_df['elo_home'].mean():.0f}")
-
-    # ---- 3c. Rakip kalitesi + SRS ----
-    print("  [3c] Rakip kalitesi ve SRS hesaplanıyor...")
-    team_log_feats = compute_opponent_quality(team_log_feats)
-    team_log_feats = compute_srs(team_log_feats)
-    print(f"  → opp_quality ve srs_L10 eklendi.")
-
-    # ---- 4. H2H feature'ları hesapla ----
-    print("[4/6] Head-to-Head feature'lar hesaplanıyor (dict cache)...")
-    master_with_h2h = compute_h2h_features(master)
-    # Elo feature'larını master_with_h2h'a ekle (game_id üzerinden)
-    master_with_h2h = master_with_h2h.merge(elo_df, on="game_id", how="left")
-    print(f"  → H2H + Elo merge tamamlandı.")
-
-    # ---- 5. Game-level feature matrix oluştur ----
-    print("[5/6] Game-level feature matrix oluşturuluyor...")
-    features = pivot_to_game_level(team_log_feats, master_with_h2h)
-
-    # ---- 6. Sezon başı satırları çıkar ----
-    print("[6/6] Sezon başı filtreleme...")
-    # Eğitimden çıkarılacak satırlar: her takımın sezon başındaki ilk 10 maçı
-    # (rolling pencereler çok gürültülü, model kalitesini düşürür)
+    # ---- 3. İlk sezonu çıkar ----
+    # Veri setinin ilk sezonunda rolling pencerelerin geçmişi yok.
+    # Diğer sezonların başı korunur: rolling pencereler sezonlar arası
+    # devam ettiği için sezon başı tahminleri de eğitimde temsil edilmeli.
+    print("[3/3] İlk sezon filtreleniyor...")
+    first_season = features["season_id"].astype(str).min()
     before_drop = len(features)
-    features = features[
-        (features["home_season_game_num"] >= 10) &
-        (features["away_season_game_num"] >= 10)
-    ].reset_index(drop=True)
-    after_drop = len(features)
-    print(f"  → Sezon başı satırları çıkarıldı: {before_drop} → {after_drop} ({before_drop - after_drop} satır)")
+    features = features[features["season_id"].astype(str) != first_season].reset_index(drop=True)
+    print(f"  → Sezon {first_season} çıkarıldı: {before_drop} → {len(features)}")
 
     # Son sıralama
     features = features.sort_values("game_date").reset_index(drop=True)

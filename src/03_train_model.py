@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import json
 import pickle
 import warnings
 from pathlib import Path
@@ -47,7 +48,7 @@ META_COLS = [
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
-def load_features() -> tuple[pd.DataFrame, pd.Series, list[str]]:
+def load_features() -> tuple[pd.DataFrame, pd.Series, list[str], pd.Series]:
     print("[1/4] Features yükleniyor...")
     df = pd.read_parquet(PROC_DIR / "features.parquet")
     df = df.sort_values("game_date").reset_index(drop=True)
@@ -60,7 +61,7 @@ def load_features() -> tuple[pd.DataFrame, pd.Series, list[str]]:
     print(f"  → Feature sayısı: {len(feat_cols)}")
     print(f"  → Ev sahibi W  : {y.mean():.3f}")
     print(f"  → Tarih aralığı: {df['game_date'].min().date()} → {df['game_date'].max().date()}")
-    return X, y, feat_cols
+    return X, y, feat_cols, df["game_date"]
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +121,7 @@ def main(n_trials: int = 150):
     print(f"XGBoost Eğitimi — Optuna ({n_trials} trial) + TimeSeriesSplit")
     print(f"{'='*60}\n")
 
-    X, y, feat_cols = load_features()
+    X, y, feat_cols, dates = load_features()
 
     # ---- TimeSeriesSplit ----
     # 5 fold, sıralı split. gap=0 çünkü shift(1) zaten koruma sağlıyor.
@@ -181,6 +182,21 @@ def main(n_trials: int = 150):
 
     # ---- Baseline karşılaştırma ----
     baseline_logloss = log_loss(y, np.full(len(y), y.mean()))
+
+    # API/UI bu dosyadan okur (sabit değer yerine)
+    meta = {
+        "trained_at":   pd.Timestamp.now().isoformat(timespec="seconds"),
+        "n_trials":     n_trials,
+        "n_games":      int(len(X)),
+        "n_features":   len(feat_cols),
+        "date_from":    str(dates.min().date()),
+        "date_to":      str(dates.max().date()),
+        "cv_logloss":   float(study.best_value),
+        "best_params":  study.best_params,
+    }
+    meta_path = MODELS_DIR / "train_meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"  → Eğitim bilgisi: {meta_path}")
     print(f"\n  Baseline log-loss (naive): {baseline_logloss:.5f}")
     print(f"  Model CV log-loss        : {study.best_value:.5f}")
     improvement = (baseline_logloss - study.best_value) / baseline_logloss * 100

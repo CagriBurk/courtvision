@@ -105,3 +105,42 @@ def test_today_games(mocker):
     assert data["games"][0]["id"] == "0022300001"
     assert data["games"][0]["home"]["abbreviation"] == "LAL"
     assert data["games"][0]["away"]["abbreviation"] == "DEN"
+
+
+def test_predictions_fresh_reads_meta(tmp_path, monkeypatch):
+    import json
+    from datetime import date
+    import api_server
+
+    monkeypatch.setattr(api_server, "LIVE_DIR", tmp_path)
+    assert api_server._predictions_fresh() is False  # no meta.json yet
+
+    (tmp_path / "meta.json").write_text(json.dumps({"date": "2000-01-01"}))
+    assert api_server._predictions_fresh() is False  # stale
+
+    (tmp_path / "meta.json").write_text(json.dumps({"date": str(date.today())}))
+    assert api_server._predictions_fresh() is True
+
+
+def test_model_metrics_from_files(tmp_path, monkeypatch):
+    import json
+    import api_server
+
+    monkeypatch.setattr(api_server, "MODELS_DIR", tmp_path)
+
+    # No metric files yet → nulls, not made-up numbers
+    data = client.get("/api/model/metrics").json()
+    assert data["accuracy"] is None
+    assert data["foldMetrics"] == []
+
+    (tmp_path / "train_meta.json").write_text(json.dumps({"n_games": 1234, "n_trials": 30}))
+    (tmp_path / "metrics.json").write_text(json.dumps({
+        "accuracy": 0.6543, "baseline_acc": 0.58, "auc": 0.71, "logloss": 0.61, "brier": 0.21,
+        "evaluated_at": "2026-10-31T12:00:00",
+        "folds": [{"fold": 1, "accuracy": 0.66, "auc": 0.72, "logloss": 0.6}],
+    }))
+    data = client.get("/api/model/metrics").json()
+    assert data["accuracy"] == 65.4
+    assert data["dataPoints"] == 1234
+    assert data["nTrials"] == 30
+    assert data["foldMetrics"][0]["accuracy"] == 66.0

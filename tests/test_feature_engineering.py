@@ -147,17 +147,34 @@ def test_compute_h2h_features():
     assert h2h_df.iloc[0]["h2h_home_win_rate"] == 0.5
     assert h2h_df.iloc[0]["h2h_pts_diff_mean"] == 0.0
 
-    # G2: A won against B as home. Diff was +10 for A.
-    # Current home is B. Previous game A was home and won.
-    # The home team for G2 is B. B lost previous game.
-    # The history loop evaluates points based on the exact matching 'home' and 'away'. Wait, no.
-    # The history loop uses dict mapping home team's perspective in previous matchups.
+    # G2: B is home. Only previous meeting: A (home) beat B by 10.
+    # From the CURRENT home team's (B's) perspective: 0 wins, -10 margin.
     assert h2h_df.iloc[1]["h2h_n_games"] == 1
+    assert h2h_df.iloc[1]["h2h_home_win_rate"] == 0.0
+    assert h2h_df.iloc[1]["h2h_pts_diff_mean"] == -10.0
 
-    # G3: A is home again. Previous games:
-    # G1: A home, B away, A won (+10)
-    # G2: B home, A away, B lost (-10) -> for B vs A
+    # G3: A is home again. G1: A won by 10 at home, G2: A won by 10 away.
+    # From A's perspective: 2 wins out of 2, +10 average margin.
     assert h2h_df.iloc[2]["h2h_n_games"] == 2
+    assert h2h_df.iloc[2]["h2h_home_win_rate"] == 1.0
+    assert h2h_df.iloc[2]["h2h_pts_diff_mean"] == 10.0
+
+
+def test_compute_h2h_features_skips_upcoming_games():
+    # An upcoming game (target NaN) gets features but adds nothing to history
+    master = pd.DataFrame({
+        "game_id": ["G1", "G2", "G3"],
+        "game_date": pd.to_datetime(["2023-01-01", "2023-01-10", "2023-01-20"]),
+        "team_id_home": ["A", "B", "A"],
+        "team_id_away": ["B", "A", "B"],
+        "target": [1, np.nan, np.nan],
+        "pts_home": [100, np.nan, np.nan],
+        "pts_away": [90, np.nan, np.nan],
+    })
+    h2h_df = compute_h2h_features(master)
+    assert h2h_df.iloc[1]["h2h_n_games"] == 1
+    assert h2h_df.iloc[2]["h2h_n_games"] == 1
+
 
 def test_pivot_to_game_level():
     # Setup simple tall_features
@@ -191,35 +208,3 @@ def test_pivot_to_game_level():
 
     assert wide_features.iloc[0]["home_pts_scored_L5"] == 100.0
     assert wide_features.iloc[0]["away_pts_scored_L5"] == 90.0
-
-def test_compute_live_team_features():
-    from feature_engineering import compute_live_team_features
-    data = {
-        "GAME_DATE": ["2023-01-01", "2023-01-03", "2023-01-05"],
-        "WL": ["W", "L", "W"],
-        "MATCHUP": ["ATL vs. BOS", "ATL @ NYK", "ATL vs. MIA"],
-        "PTS": [110, 100, 115],
-        "PLUS_MINUS": [5, -10, 10],
-        "FG_PCT": [0.45, 0.40, 0.50],
-        "FG3_PCT": [0.3, 0.3, 0.3],
-        "FT_PCT": [0.8, 0.8, 0.8],
-        "FGA": [90, 90, 90],
-        "FTA": [20, 20, 20],
-        "REB": [40, 40, 40],
-        "AST": [20, 20, 20],
-        "TOV": [10, 10, 10],
-        "STL": [5, 5, 5],
-        "BLK": [5, 5, 5],
-        "OREB": [10, 10, 10],
-        "DREB": [30, 30, 30]
-    }
-    df = pd.DataFrame(data)
-
-    # Compute live features for next game (which is index 3 technically if today is later)
-    today = pd.Timestamp("2023-01-07")
-    feats = compute_live_team_features(df, today=today)
-
-    import pytest
-    assert "pace_L5" in feats
-    assert "point_diff_L5" in feats
-    assert feats["pace_L5"] > 0

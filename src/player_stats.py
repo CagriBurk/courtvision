@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from season import current_season
+
 try:
     from nba_api.stats.endpoints import LeagueDashPlayerStats
     NBA_API_AVAILABLE = True
@@ -31,7 +33,6 @@ PLAYER_CACHE = CACHE_DIR / "player_stats.parquet"
 INJURY_CACHE = CACHE_DIR / "injuries.json"
 
 CACHE_TTL_HOURS = 6   # 6 saat geçerliliği
-CURRENT_SEASON  = "2025-26"
 
 # Bellek içi önbellek (in-memory cache)
 _PLAYER_STATS_MEM_CACHE: pd.DataFrame | None = None
@@ -101,7 +102,7 @@ def get_player_stats(force_refresh: bool = False) -> pd.DataFrame:
     try:
         print("[player_stats] LeagueDashPlayerStats çekiliyor...")
         stats = LeagueDashPlayerStats(
-            season=CURRENT_SEASON,
+            season=current_season(),
             season_type_all_star="Regular Season",
             per_mode_detailed="PerGame",
             timeout=30,

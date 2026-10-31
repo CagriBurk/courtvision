@@ -2,7 +2,7 @@
 elo_srs.py
 ----------
 Elo rating and SRS (Simple Rating System) calculation module.
-02_build_features.py ve 05_predict_today.py imported by.
+Used by feature_engineering.build_feature_matrix().
 
 Functions:
   compute_elo(master)              → game_id based pre-game Elo values
@@ -86,45 +86,6 @@ def compute_elo(master: pd.DataFrame) -> pd.DataFrame:
             elo_table[a_id] += ELO_K * ((1 - actual) - (1 - e_home))
 
     return pd.DataFrame(records)
-
-
-def get_current_elo(master: pd.DataFrame) -> dict[str, float]:
-    """
-    Tüm maçlardan sonraki (güncel) Elo değerlerini döner.
-    Live tahmin için: {team_id: elo}
-    """
-    master = master.sort_values("game_date").reset_index(drop=True)
-
-    elo_table: dict[str, float] = {}
-    last_season: dict[str, str] = {}
-
-    for _, row in master.iterrows():
-        h_id = str(row["team_id_home"])
-        a_id = str(row["team_id_away"])
-        season = str(row.get("season_id", ""))
-        target = row.get("target", np.nan)
-
-        for tid in (h_id, a_id):
-            if tid not in elo_table:
-                elo_table[tid] = ELO_INIT
-                last_season[tid] = season
-            if last_season[tid] != season:
-                elo_table[tid] = (
-                    ELO_REGRESSION * elo_table[tid]
-                    + (1 - ELO_REGRESSION) * ELO_INIT
-                )
-                last_season[tid] = season
-
-        h_elo = elo_table[h_id]
-        a_elo = elo_table[a_id]
-        e_home = 1.0 / (1.0 + 10.0 ** ((a_elo - h_elo) / 400.0))
-
-        if pd.notna(target):
-            actual = float(target)
-            elo_table[h_id] += ELO_K * (actual - e_home)
-            elo_table[a_id] += ELO_K * ((1 - actual) - (1 - e_home))
-
-    return elo_table
 
 
 # ---------------------------------------------------------------------------

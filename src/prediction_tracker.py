@@ -223,14 +223,15 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
     if unfilled.empty:
         return log
 
-    # Son days_back gün için LeagueGameLog çek (2025-26 current season)
+    # Son days_back gün için güncel sezonun LeagueGameLog'unu çek
     from datetime import date, timedelta
+    from season import current_season
 
     cutoff = date.today() - timedelta(days=days_back)
 
     try:
         gl = leaguegamelog.LeagueGameLog(
-            season="2025-26",
+            season=current_season(),
             season_type_all_star="Regular Season",
             league_id="00",
         )
@@ -240,7 +241,7 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
         print(f"[tracker] LeagueGameLog hatası: {e}")
         return log
 
-    if df.empty:
+    if df.empty or "WL" not in df.columns:
         return log
 
     # Tamamlanmış maçlar (WL dolu)

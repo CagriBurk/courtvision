@@ -14,7 +14,7 @@ const API_BASE = 'http://127.0.0.1:8765'
 const WATCHED_KEY = 'nba_watched_games'
 const NOTIF_BEFORE_MS = 30 * 60 * 1000 // 30 dakika
 
-async function fetchGamesFromApi(): Promise<{ games: Game[] }> {
+async function fetchGamesFromApi(): Promise<{ games: Game[]; updating?: boolean }> {
   const res = await fetch(`${API_BASE}/api/today-games`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
@@ -40,10 +40,13 @@ export default function App(): React.JSX.Element {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['todayGames'],
     queryFn: fetchGamesFromApi,
-    retry: 1
+    retry: 1,
+    // API generates today's predictions in the background after startup
+    refetchInterval: (query) => (query.state.data?.updating ? 3000 : false)
   })
 
   const games = data?.games || []
+  const preparing = !!data?.updating && games.length === 0
   const apiConnected = !isError && !isLoading
   const apiError = isError
     ? 'FastAPI sunucusuna bağlanılamadı. Sunucuyu başlatın:\npython -m uvicorn src.api_server:app --host 127.0.0.1 --port 8765'
@@ -149,7 +152,7 @@ export default function App(): React.JSX.Element {
             games={games}
             selectedGame={selectedGame}
             onSelectGame={setSelectedGame}
-            isLoading={isLoading}
+            isLoading={isLoading || preparing}
             apiConnected={apiConnected}
             apiError={apiError}
             onRefresh={() => refetch()}

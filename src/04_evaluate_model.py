@@ -249,7 +249,8 @@ def main():
 
     best_params = {**study.best_params,
                    "objective": "binary:logistic", "eval_metric": "logloss",
-                   "tree_method": "hist", "random_state": 42, "n_jobs": -1}
+                   "tree_method": "hist", "device": "cuda",
+                   "random_state": 42, "n_jobs": -1}
 
     tscv = TimeSeriesSplit(n_splits=5, gap=0)
 
@@ -287,6 +288,20 @@ def main():
 
     print("\n[2/3] Grafikler oluşturuluyor...")
     plots = build_plots(y_true, y_prob, X.iloc[valid_mask], final_model)
+
+    # API/UI bu dosyadan okur (sabit değer yerine)
+    metrics_out = {
+        "evaluated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "n_oof_games":  int(valid_mask.sum()),
+        **{k: float(v) for k, v in metrics.items()},
+        "folds": [
+            {k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in m.items()}
+            for m in fold_metrics
+        ],
+    }
+    metrics_path = MODELS_DIR / "metrics.json"
+    metrics_path.write_text(json.dumps(metrics_out, indent=2), encoding="utf-8")
+    print(f"  → Metrikler: {metrics_path}")
 
     print("[3/3] HTML raporu yazılıyor...")
     generate_html_report(

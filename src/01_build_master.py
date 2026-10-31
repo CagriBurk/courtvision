@@ -96,19 +96,14 @@ def load_kaggle_games() -> pd.DataFrame:
 # 2. Load nba_api cache (api_cache/all_api_seasons.parquet)
 # ---------------------------------------------------------------------------
 def load_api_cache() -> pd.DataFrame:
-    combined_path = CACHE_DIR / "all_api_seasons.parquet"
+    # Per-season files are the source of truth (06 refreshes the current one)
+    individual = sorted(CACHE_DIR.glob("season_*.parquet"))
+    if not individual:
+        print("[2/5] API cache not found. Run 06_update_data.py first.")
+        return pd.DataFrame()
 
-    if not combined_path.exists():
-        # Try individual parquet files
-        individual = sorted(CACHE_DIR.glob("season_*.parquet"))
-        if not individual:
-            print("[2/5] API cache not found. Run 06_update_data.py first.")
-            return pd.DataFrame()
-
-        frames = [pd.read_parquet(p) for p in individual]
-        api_df = pd.concat(frames, ignore_index=True)
-    else:
-        api_df = pd.read_parquet(combined_path)
+    frames = [pd.read_parquet(p) for p in individual]
+    api_df = pd.concat(frames, ignore_index=True)
 
     print(f"[2/5] API cache loaded: {len(api_df)} games")
 

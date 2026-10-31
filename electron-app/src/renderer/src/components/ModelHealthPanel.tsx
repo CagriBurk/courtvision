@@ -1,18 +1,15 @@
 import { Activity, Target, Clock, TrendingUp } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import { formatDateTr, useModelMetrics } from '../hooks/useModelMetrics'
 
 interface ModelHealthPanelProps {
   apiBase?: string
 }
 
-// Gerçek OOF değerleri — 04_evaluate_model.py, 2026-02-22
-const OOF_ACCURACY = 66.7
-const BRIER_SCORE = 0.2105
-const LAST_TUNING = '22 Şub 2026'
-
 export default function ModelHealthPanel({
   apiBase = 'http://127.0.0.1:8765'
 }: ModelHealthPanelProps) {
+  const { data: metrics } = useModelMetrics(apiBase)
   const { data } = useQuery({
     queryKey: ['history', apiBase],
     queryFn: async () => {
@@ -50,7 +47,7 @@ export default function ModelHealthPanel({
             <Target size={10} className="text-slate-500" />
             <p className="text-slate-500 text-xs">OOF Accuracy</p>
           </div>
-          <p className="text-emerald-400 font-bold text-lg leading-none">{OOF_ACCURACY}%</p>
+          <p className="text-emerald-400 font-bold text-lg leading-none">{metrics?.accuracy != null ? `${metrics.accuracy}%` : '—'}</p>
         </div>
 
         {/* Brier Score */}
@@ -59,7 +56,7 @@ export default function ModelHealthPanel({
             <TrendingUp size={10} className="text-slate-500" />
             <p className="text-slate-500 text-xs">Brier Score</p>
           </div>
-          <p className="text-blue-400 font-bold text-lg leading-none">{BRIER_SCORE}</p>
+          <p className="text-blue-400 font-bold text-lg leading-none">{metrics?.brierScore != null ? metrics.brierScore.toFixed(4) : '—'}</p>
         </div>
 
         {/* Recent accuracy */}
@@ -83,8 +80,8 @@ export default function ModelHealthPanel({
             <Clock size={10} className="text-slate-500" />
             <p className="text-slate-500 text-xs">Son Tuning</p>
           </div>
-          <p className="text-white text-xs font-medium mt-1">{LAST_TUNING}</p>
-          <p className="text-slate-600 text-xs">150 trial</p>
+          <p className="text-white text-xs font-medium mt-1">{formatDateTr(metrics?.trainedAt)}</p>
+          <p className="text-slate-600 text-xs">{metrics?.nTrials ?? '—'} trial</p>
         </div>
       </div>
     </div>

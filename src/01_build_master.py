@@ -33,8 +33,13 @@ PROC_DIR.mkdir(parents=True, exist_ok=True)
 # 1. Load and filter Kaggle game.csv
 # ---------------------------------------------------------------------------
 def load_kaggle_games() -> pd.DataFrame:
+    game_path = RAW_DIR / "game.csv"
+    if not game_path.exists():
+        print("[1/5] Kaggle game.csv not found — using nba_api cache only.")
+        return pd.DataFrame()
+
     print("[1/5] Loading Kaggle game.csv...")
-    game = pd.read_csv(RAW_DIR / "game.csv", parse_dates=["game_date"])
+    game = pd.read_csv(game_path, parse_dates=["game_date"])
 
     # Date filter: 2000+ modern era
     game = game[game["game_date"] >= "2000-01-01"]
@@ -137,6 +142,10 @@ def merge_sources(kaggle_df: pd.DataFrame, api_df: pd.DataFrame) -> pd.DataFrame
         print("  → Only Kaggle data is used.")
         return kaggle_df
 
+    if kaggle_df.empty:
+        print(f"  → Only API data is used: {len(api_df)} games")
+        return api_df.sort_values("game_date").reset_index(drop=True)
+
     # API verisindeki gameslardan Kaggle'da olmayanları al
     if "game_id" in api_df.columns and "game_id" in kaggle_df.columns:
         existing_ids = set(kaggle_df["game_id"].astype(str))
@@ -173,8 +182,13 @@ def merge_sources(kaggle_df: pd.DataFrame, api_df: pd.DataFrame) -> pd.DataFrame
 # 4. merge other_stats.csv
 # ---------------------------------------------------------------------------
 def merge_other_stats(master: pd.DataFrame) -> pd.DataFrame:
+    other_path = RAW_DIR / "other_stats.csv"
+    if not other_path.exists():
+        print("[4/5] other_stats.csv not found — skipped (columns stay NaN).")
+        return master
+
     print("[4/5] other_stats.csv merging (LEFT JOIN)...")
-    other = pd.read_csv(RAW_DIR / "other_stats.csv")
+    other = pd.read_csv(other_path)
 
     keep = [
         "game_id",
@@ -208,25 +222,33 @@ def merge_other_stats(master: pd.DataFrame) -> pd.DataFrame:
 # 5. line_score.csv merge (period scores)
 # ---------------------------------------------------------------------------
 def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
-    print("[5/5] line_score.csv merging (LEFT JOIN)...")
-    ls = pd.read_csv(RAW_DIR / "line_score.csv")
+    ls_path = RAW_DIR / "line_score.csv"
+    ls = None
+    if ls_path.exists():
+        print("[5/5] line_score.csv merging (LEFT JOIN)...")
+        ls = pd.read_csv(ls_path)
 
-    keep = [
-        "game_id",
-        "pts_qtr1_home", "pts_qtr2_home", "pts_qtr3_home", "pts_qtr4_home",
-        "pts_ot1_home",
-        "pts_qtr1_away", "pts_qtr2_away", "pts_qtr3_away", "pts_qtr4_away",
-        "pts_ot1_away",
-    ]
-    keep = [c for c in keep if c in ls.columns]
-    ls = ls[keep].drop_duplicates(subset=["game_id"]).copy()
-    ls["game_id"] = ls["game_id"].astype(str)  # type consistency
+        keep = [
+            "game_id",
+            "pts_qtr1_home", "pts_qtr2_home", "pts_qtr3_home", "pts_qtr4_home",
+            "pts_ot1_home",
+            "pts_qtr1_away", "pts_qtr2_away", "pts_qtr3_away", "pts_qtr4_away",
+            "pts_ot1_away",
+        ]
+        keep = [c for c in keep if c in ls.columns]
+        ls = ls[keep].drop_duplicates(subset=["game_id"]).copy()
+        ls["game_id"] = ls["game_id"].astype(str)  # type consistency
 
-    # Drop existing line_score columns (API data left empty)
-    existing_ls_cols = [c for c in keep if c != "game_id" and c in master.columns]
-    master_no_ls = master.drop(columns=existing_ls_cols, errors="ignore")
+        # Drop existing line_score columns (API data left empty)
+        existing_ls_cols = [c for c in keep if c != "game_id" and c in master.columns]
+        master_no_ls = master.drop(columns=existing_ls_cols, errors="ignore")
 
-    master_merged = master_no_ls.merge(ls, on="game_id", how="left")
+        master_merged = master_no_ls.merge(ls, on="game_id", how="left")
+    else:
+        # Derived columns below are still created (as NaN) so downstream
+        # rolling features get numeric dtypes
+        print("[5/5] line_score.csv not found — skipped (columns stay NaN).")
+        master_merged = master.copy()
 
     # OT and quarter difference derivations
     master_merged["went_to_ot"] = (
@@ -243,9 +265,10 @@ def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
         else:
             master_merged[f"qdiff_{q}"] = np.nan
 
-    coverage = ls["game_id"].nunique()
-    total = master["game_id"].nunique()
-    print(f"  → line_score coverage: {coverage}/{total} games ({100*coverage/total:.1f}%)")
+    if ls is not None:
+        coverage = ls["game_id"].nunique()
+        total = master["game_id"].nunique()
+        print(f"  → line_score coverage: {coverage}/{total} games ({100*coverage/total:.1f}%)")
     return master_merged
 
 

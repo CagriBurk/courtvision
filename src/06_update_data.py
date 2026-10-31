@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import time
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +40,16 @@ DEFAULT_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
 # nba_api rate limit: ~600ms wait is enough
 SLEEP_SEC = 0.7
+
+
+# ---------------------------------------------------------------------------
+# Helper: season strings ("2000-01", ...) up to the current season
+# ---------------------------------------------------------------------------
+def seasons_since(start_year: int) -> list[str]:
+    today = date.today()
+    # NBA regular season starts in October
+    current_start = today.year if today.month >= 10 else today.year - 1
+    return [f"{y}-{str(y + 1)[-2:]}" for y in range(start_year, current_start + 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -239,9 +250,16 @@ if __name__ == "__main__":
         help="Çekilecek sezonlar (örn: 2023-24 2024-25 2025-26)",
     )
     parser.add_argument(
+        "--since",
+        type=int,
+        default=None,
+        help="Bu yıldan güncel sezona kadar tüm sezonlar (örn: 2000 → 2000-01 ... ); --seasons'ı ezer",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Önbellekte olsa bile yeniden çek",
     )
     args = parser.parse_args()
-    main(seasons=args.seasons, force_refresh=args.force)
+    seasons = seasons_since(args.since) if args.since else args.seasons
+    main(seasons=seasons, force_refresh=args.force)

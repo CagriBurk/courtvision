@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from feature_engineering import build_feature_matrix
+from modeling import apply_calibration
 from nba_data_client import NBA_API_AVAILABLE, fetch_season_wide, fetch_today_schedule
 from prediction_tracker import save_predictions, fill_results
 from season import current_season, nba_today, season_id, season_start_year
@@ -141,7 +142,8 @@ def _int(v):
 
 
 def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
-                  feature_columns: list, target_date: date) -> list[dict]:
+                  feature_columns: list, target_date: date,
+                  calibration: dict | None = None) -> list[dict]:
     predictions = []
 
     for g in games:
@@ -152,7 +154,8 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
         row = live_feats.loc[gid]
 
         X_live = row.reindex(feature_columns).to_frame().T.astype(float)
-        prob_home = float(model.predict_proba(X_live)[0][1])
+        raw_prob = model.predict_proba(X_live)[0][1]
+        prob_home = float(apply_calibration(calibration, raw_prob))
         prob_away = 1.0 - prob_home
         winner    = "HOME" if prob_home > 0.5 else "AWAY"
         conf      = "YÜKSEK" if max(prob_home, prob_away) >= 0.65 else \
@@ -333,7 +336,12 @@ def main(target_date: date | None = None):
     with open(MODELS_DIR / "feature_columns.pkl", "rb") as f:
         feature_columns = pickle.load(f)
     model.set_params(device="cpu")  # inference CPU'da, CUDA device mismatch uyarısını kapat
-    print(f"Model loaded. Feature count: {len(feature_columns)}\n")
+    print(f"Model loaded. Feature count: {len(feature_columns)}")
+
+    # 04_evaluate_model.py writes this only if it improved the holdout log-loss
+    cal_path = MODELS_DIR / "calibration.json"
+    calibration = json.loads(cal_path.read_text(encoding="utf-8")) if cal_path.exists() else None
+    print(f"Kalibrasyon: {'açık (Platt)' if calibration else 'kapalı'}\n")
 
     # Master tablo + güncel sezon
     master = _normalize_ids(pd.read_parquet(PROC_DIR / "master_games.parquet"))
@@ -362,7 +370,7 @@ def main(target_date: date | None = None):
     live_feats = compute_live_features(master, games, target_date)
 
     print("\nTahminler hesaplanıyor...")
-    predictions = predict_games(games, live_feats, model, feature_columns, target_date)
+    predictions = predict_games(games, live_feats, model, feature_columns, target_date, calibration)
     for p in predictions:
         p["home_form_seq"] = recent_form(master, str(p["home_team_id"]), target_date)
         p["away_form_seq"] = recent_form(master, str(p["away_team_id"]), target_date)

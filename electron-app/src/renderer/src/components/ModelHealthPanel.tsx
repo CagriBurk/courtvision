@@ -45,7 +45,9 @@ export default function ModelHealthPanel({
         <div className="bg-slate-800/50 rounded-lg p-2.5">
           <div className="flex items-center gap-1 mb-0.5">
             <Target size={10} className="text-slate-500" />
-            <p className="text-slate-500 text-xs">OOF Accuracy</p>
+            <p className="text-slate-500 text-xs">
+              {metrics?.headline === 'holdout' ? 'Doğruluk (holdout)' : 'OOF Doğruluk'}
+            </p>
           </div>
           <p className="text-emerald-400 font-bold text-lg leading-none">{metrics?.accuracy != null ? `${metrics.accuracy}%` : '—'}</p>
         </div>

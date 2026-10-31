@@ -3,65 +3,49 @@
 -----------------
 Trains XGBoost model with Optuna + TimeSeriesSplit.
 
+The last completed season is held out: Optuna and cross-validation only see
+earlier seasons, so 04_evaluate_model.py can measure the model on games it
+was never tuned on. The production model is then refit on ALL data
+(holdout and the season in progress included).
+
 Input : data/processed/features.parquet
 Output :
   models/xgb_best.pkl          (trained model)
   models/optuna_study.pkl      (Optuna study, for inspection)
   models/feature_columns.pkl   (feature order, critical for inference)
+  models/train_meta.json       (training info for API/UI and 04)
 
 Usage:
     python src/03_train_model.py
-    python src/03_train_model.py --trials 50   # for fast testing
+    python src/03_train_model.py --trials 50           # for fast testing
+    python src/03_train_model.py --holdout-season 22024
+    python src/03_train_model.py --no-holdout
 """
 
 import argparse
 import json
 import pickle
 import warnings
-from pathlib import Path
 
 import numpy as np
 import optuna
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.metrics import log_loss
 from sklearn.model_selection import TimeSeriesSplit
+
+from modeling import (
+    BASE_PARAMS,
+    MODELS_DIR,
+    default_holdout_season,
+    load_feature_table,
+    split_holdout,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# ---------------------------------------------------------------------------
-ROOT       = Path(__file__).parent.parent
-PROC_DIR   = ROOT / "data" / "processed"
-MODELS_DIR = ROOT / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Meta columns not used for modeling
-META_COLS = [
-    "game_id", "game_date", "season_id", "season_type",
-    "team_id_home", "team_abbreviation_home", "team_name_home",
-    "team_id_away", "team_abbreviation_away", "team_name_away",
-    "target",
-]
-
-
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
-def load_features() -> tuple[pd.DataFrame, pd.Series, list[str], pd.Series]:
-    print("[1/4] Features yükleniyor...")
-    df = pd.read_parquet(PROC_DIR / "features.parquet")
-    df = df.sort_values("game_date").reset_index(drop=True)
-
-    feat_cols = [c for c in df.columns if c not in META_COLS]
-    X = df[feat_cols]
-    y = df["target"]
-
-    print(f"  → Toplam maç   : {len(df)}")
-    print(f"  → Feature sayısı: {len(feat_cols)}")
-    print(f"  → Ev sahibi W  : {y.mean():.3f}")
-    print(f"  → Tarih aralığı: {df['game_date'].min().date()} → {df['game_date'].max().date()}")
-    return X, y, feat_cols, df["game_date"]
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +64,7 @@ def make_objective(X: pd.DataFrame, y: pd.Series, tscv: TimeSeriesSplit):
             "reg_alpha":         trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
             "reg_lambda":        trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
             "gamma":             trial.suggest_float("gamma", 0.0, 5.0),
-            # Sabit parametreler
-            "objective":         "binary:logistic",
-            "eval_metric":       "logloss",
-            "tree_method":       "hist",
-            "device":            "cuda",
-            "random_state":      42,
-            "n_jobs":            -1,
+            **BASE_PARAMS,
         }
 
         cv_scores = []
@@ -95,11 +73,7 @@ def make_objective(X: pd.DataFrame, y: pd.Series, tscv: TimeSeriesSplit):
             y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
             model = xgb.XGBClassifier(**params)
-            model.fit(
-                X_tr, y_tr,
-                eval_set=[(X_val, y_val)],
-                verbose=False,
-            )
+            model.fit(X_tr, y_tr, verbose=False)
             y_prob = model.predict_proba(X_val)[:, 1]
             cv_scores.append(log_loss(y_val, y_prob))
 
@@ -116,18 +90,25 @@ def make_objective(X: pd.DataFrame, y: pd.Series, tscv: TimeSeriesSplit):
 # ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
-def main(n_trials: int = 150):
+def main(n_trials: int = 150, holdout_season: str | None = None):
     print(f"\n{'='*60}")
     print(f"XGBoost Eğitimi — Optuna ({n_trials} trial) + TimeSeriesSplit")
     print(f"{'='*60}\n")
 
-    X, y, feat_cols, dates = load_features()
+    print("[1/4] Features yükleniyor...")
+    df, feat_cols = load_feature_table()
+    dev, holdout = split_holdout(df, holdout_season)
+    print(f"  → Toplam maç    : {len(df)} ({df['game_date'].min().date()} → {df['game_date'].max().date()})")
+    print(f"  → Feature sayısı: {len(feat_cols)}")
+    if holdout_season:
+        print(f"  → Holdout sezon : {holdout_season} ({len(holdout)} maç) — aramaya dahil değil")
+    print(f"  → Arama verisi  : {len(dev)} maç")
 
-    # ---- TimeSeriesSplit ----
+    # ---- Optuna (sadece holdout öncesi sezonlar) ----
     # 5 fold, sıralı split. gap=0 çünkü shift(1) zaten koruma sağlıyor.
     tscv = TimeSeriesSplit(n_splits=5, gap=0)
 
-    print("[2/4] Optuna hiper-parametre araması başlıyor...")
+    print("\n[2/4] Optuna hiper-parametre araması başlıyor...")
     print(f"  Trials: {n_trials} | Folds: 5 | Objective: log_loss")
     print("  (Bu ~30-90 dakika sürebilir; ilerleme gösterilir)\n")
 
@@ -136,9 +117,8 @@ def main(n_trials: int = 150):
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=2),
     )
-
     study.optimize(
-        make_objective(X, y, tscv),
+        make_objective(dev[feat_cols], dev["target"], tscv),
         n_trials=n_trials,
         show_progress_bar=True,
     )
@@ -149,18 +129,10 @@ def main(n_trials: int = 150):
     for k, v in study.best_params.items():
         print(f"    {k}: {v}")
 
-    # ---- Final model: tüm veri ile eğit ----
+    # ---- Final model: tüm veri ile eğit (canlı tahmin için) ----
     print("\n[3/4] Final model tüm veri ile eğitiliyor...")
-    best_params = {**study.best_params,
-                   "objective":   "binary:logistic",
-                   "eval_metric": "logloss",
-                   "tree_method": "hist",
-                   "device":      "cuda",
-                   "random_state": 42,
-                   "n_jobs": -1}
-
-    final_model = xgb.XGBClassifier(**best_params)
-    final_model.fit(X, y)
+    final_model = xgb.XGBClassifier(**study.best_params, **BASE_PARAMS)
+    final_model.fit(df[feat_cols], df["target"])
 
     # ---- Kaydet ----
     print("[4/4] Modeller kaydediliyor...")
@@ -180,23 +152,25 @@ def main(n_trials: int = 150):
         pickle.dump(feat_cols, f)
     print(f"  → Feature sütunları: {feat_path}")
 
-    # ---- Baseline karşılaştırma ----
-    baseline_logloss = log_loss(y, np.full(len(y), y.mean()))
-
-    # API/UI bu dosyadan okur (sabit değer yerine)
+    # API/UI ve 04 bu dosyadan okur
     meta = {
-        "trained_at":   pd.Timestamp.now().isoformat(timespec="seconds"),
-        "n_trials":     n_trials,
-        "n_games":      int(len(X)),
-        "n_features":   len(feat_cols),
-        "date_from":    str(dates.min().date()),
-        "date_to":      str(dates.max().date()),
-        "cv_logloss":   float(study.best_value),
-        "best_params":  study.best_params,
+        "trained_at":     pd.Timestamp.now().isoformat(timespec="seconds"),
+        "n_trials":       n_trials,
+        "n_games":        int(len(df)),
+        "n_dev_games":    int(len(dev)),
+        "n_features":     len(feat_cols),
+        "date_from":      str(df["game_date"].min().date()),
+        "date_to":        str(df["game_date"].max().date()),
+        "holdout_season": holdout_season,
+        "cv_logloss":     float(study.best_value),
+        "best_params":    study.best_params,
     }
     meta_path = MODELS_DIR / "train_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"  → Eğitim bilgisi: {meta_path}")
+
+    y_dev = dev["target"]
+    baseline_logloss = log_loss(y_dev, np.full(len(y_dev), y_dev.mean()))
     print(f"\n  Baseline log-loss (naive): {baseline_logloss:.5f}")
     print(f"  Model CV log-loss        : {study.best_value:.5f}")
     improvement = (baseline_logloss - study.best_value) / baseline_logloss * 100
@@ -211,7 +185,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--trials", type=int, default=150,
-        help="Optuna trial sayısı (varsayılan: 150, for fast testing: 20-30)"
+        help="Optuna trial sayısı (varsayılan: 150, hızlı test için: 20-30)"
+    )
+    parser.add_argument(
+        "--holdout-season", type=str, default=None,
+        help="Aramadan ayrılacak sezon (SEASON_ID, örn: 22025). Varsayılan: son tamamlanmış sezon"
+    )
+    parser.add_argument(
+        "--no-holdout", action="store_true",
+        help="Holdout ayırma (tüm veride arama yap)"
     )
     args = parser.parse_args()
-    main(n_trials=args.trials)
+    holdout = None if args.no_holdout else (args.holdout_season or default_holdout_season())
+    main(n_trials=args.trials, holdout_season=holdout)

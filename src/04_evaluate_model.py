@@ -1,18 +1,24 @@
 """
 04_evaluate_model.py
 --------------------
-Measures model performance with walk-forward (out-of-fold) evaluation.
-Reruns 5-fold with best parameters, collecting validation data for each fold.
+Measures model performance two ways:
+
+  1. Walk-forward OOF on the seasons before the holdout (5-fold
+     TimeSeriesSplit with the tuned parameters).
+  2. Holdout: a model trained on all pre-holdout seasons predicts the
+     held-out season, which Optuna never saw. This is the honest headline
+     number; calibration is measured here too.
 
 Input :
   data/processed/features.parquet
   models/xgb_best.pkl
-  models/optuna_study.pkl
   models/feature_columns.pkl
+  models/train_meta.json      (best params + holdout season, from 03)
 
 Output :
-  reports/evaluation_report.html  (interactive HTML report)
-  Console: fold-by-fold and total metrics
+  models/metrics.json             (read by the API/UI)
+  reports/evaluation_report.html
+  Console: fold-by-fold, holdout and per-season metrics
 
 Usage:
     python src/04_evaluate_model.py
@@ -21,13 +27,11 @@ Usage:
 import json
 import pickle
 import warnings
-from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import optuna
 import pandas as pd
 import xgboost as xgb
 from sklearn.calibration import calibration_curve
@@ -41,38 +45,34 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import TimeSeriesSplit
 
+from modeling import (
+    BASE_PARAMS,
+    MODELS_DIR,
+    ROOT,
+    apply_calibration,
+    calibration_table,
+    classification_metrics,
+    fit_platt,
+    load_feature_table,
+    split_holdout,
+)
+
 warnings.filterwarnings("ignore")
 
-# ---------------------------------------------------------------------------
-ROOT       = Path(__file__).parent.parent
-PROC_DIR   = ROOT / "data" / "processed"
-MODELS_DIR = ROOT / "models"
 REPORTS_DIR = ROOT / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
-META_COLS = [
-    "game_id", "game_date", "season_id", "season_type",
-    "team_id_home", "team_abbreviation_home", "team_name_home",
-    "team_id_away", "team_abbreviation_away", "team_name_away",
-    "target",
-]
 
 
 # ---------------------------------------------------------------------------
 def load_artifacts():
-    df = pd.read_parquet(PROC_DIR / "features.parquet")
-    df = df.sort_values("game_date").reset_index(drop=True)
+    df, _ = load_feature_table()
 
     with open(MODELS_DIR / "feature_columns.pkl", "rb") as f:
         feat_cols = pickle.load(f)
-
-    with open(MODELS_DIR / "optuna_study.pkl", "rb") as f:
-        study = pickle.load(f)
+    meta = json.loads((MODELS_DIR / "train_meta.json").read_text(encoding="utf-8"))
 
     feat_cols = [c for c in feat_cols if c in df.columns]
-    X = df[feat_cols]
-    y = df["target"]
-    return df, X, y, feat_cols, study
+    return df, feat_cols, meta
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +168,28 @@ def build_plots(y_true, y_prob, X, model):
 
 
 # ---------------------------------------------------------------------------
+def _metric_cards(m: dict) -> str:
+    return f"""<div class="metric-grid">
+  <div class="metric-card"><div class="metric-val">{m['accuracy']:.1%}</div><div class="metric-label">Accuracy</div></div>
+  <div class="metric-card"><div class="metric-val">{m['auc']:.3f}</div><div class="metric-label">AUC-ROC</div></div>
+  <div class="metric-card"><div class="metric-val">{m['logloss']:.4f}</div><div class="metric-label">Log-Loss</div></div>
+  <div class="metric-card"><div class="metric-val">{m['brier']:.4f}</div><div class="metric-label">Brier Score</div></div>
+</div>
+<p><b>Baseline (her zaman ev sahibi):</b> {m['baseline_acc']:.1%} accuracy &nbsp;|&nbsp;
+   <b>İyileşme:</b> +{(m['accuracy'] - m['baseline_acc'])*100:.1f} pp</p>"""
+
+
 def generate_html_report(
-    metrics: dict, fold_metrics: list, plots: dict,
-    feature_cols: list, out_path: Path
+    oof: dict, holdout: dict | None, holdout_season: str | None, ece: float | None,
+    fold_metrics: list, plots: dict, feature_cols: list, out_path
 ):
+    holdout_html = (
+        f"""<h2>Holdout — Sezon {holdout_season} (aramada hiç görülmedi)</h2>
+{_metric_cards(holdout)}
+<p><b>Kalibrasyon hatası (ECE):</b> {ece:.4f}</p>"""
+        if holdout else ""
+    )
+    plots_source = f"holdout sezon {holdout_season}" if holdout else "OOF"
     fold_rows = "\n".join(
         f"<tr><td>{m['fold']}</td><td>{m['n_train']}</td><td>{m['n_val']}</td>"
         f"<td>{m['accuracy']:.3f}</td><td>{m['auc']:.3f}</td>"
@@ -206,15 +224,10 @@ def generate_html_report(
    <b>Feature sayısı:</b> {len(feature_cols)} &nbsp;|&nbsp;
    <b>Algoritma:</b> XGBoost + Optuna + TimeSeriesSplit (5-fold)</p>
 
-<h2>Genel Metrikler (Out-of-Fold)</h2>
-<div class="metric-grid">
-  <div class="metric-card"><div class="metric-val">{metrics['accuracy']:.1%}</div><div class="metric-label">Accuracy</div></div>
-  <div class="metric-card"><div class="metric-val">{metrics['auc']:.3f}</div><div class="metric-label">AUC-ROC</div></div>
-  <div class="metric-card"><div class="metric-val">{metrics['logloss']:.4f}</div><div class="metric-label">Log-Loss</div></div>
-  <div class="metric-card"><div class="metric-val">{metrics['brier']:.4f}</div><div class="metric-label">Brier Score</div></div>
-</div>
-<p><b>Baseline (her zaman ev sahibi):</b> %{metrics['baseline_acc']:.1%} accuracy &nbsp;|&nbsp;
-   <b>İyileşme:</b> +{(metrics['accuracy'] - metrics['baseline_acc'])*100:.1f} pp</p>
+{holdout_html}
+
+<h2>Walk-Forward Out-of-Fold (holdout öncesi sezonlar)</h2>
+{_metric_cards(oof)}
 
 <h2>Fold-by-Fold Metrikler</h2>
 <table>
@@ -222,7 +235,7 @@ def generate_html_report(
   {fold_rows}
 </table>
 
-<h2>Grafikler</h2>
+<h2>Grafikler ({plots_source})</h2>
 <div class="plot-grid">
   <div class="plot-card"><img src="data:image/png;base64,{plots['roc']}" alt="ROC"><p>ROC Eğrisi</p></div>
   <div class="plot-card"><img src="data:image/png;base64,{plots['calibration']}" alt="Kalibrasyon"><p>Kalibrasyon Eğrisi</p></div>
@@ -239,61 +252,104 @@ def generate_html_report(
 # ---------------------------------------------------------------------------
 def main():
     print(f"\n{'='*60}")
-    print("Model Değerlendirme — Walk-Forward OOF")
+    print("Model Değerlendirme — Walk-Forward OOF + Holdout")
     print(f"{'='*60}\n")
 
-    df, X, y, feat_cols, study = load_artifacts()
+    df, feat_cols, meta = load_artifacts()
+    holdout_season = meta.get("holdout_season")
+    dev, holdout = split_holdout(df, holdout_season)
 
     with open(MODELS_DIR / "xgb_best.pkl", "rb") as f:
         final_model = pickle.load(f)
 
-    best_params = {**study.best_params,
-                   "objective": "binary:logistic", "eval_metric": "logloss",
-                   "tree_method": "hist", "device": "cuda",
-                   "random_state": 42, "n_jobs": -1}
-
+    best_params = {**meta["best_params"], **BASE_PARAMS}
     tscv = TimeSeriesSplit(n_splits=5, gap=0)
 
-    print("[1/3] Walk-forward değerlendirme çalışıyor...")
-    oof_probs, fold_metrics = walk_forward_eval(X, y, best_params, tscv)
+    # ---- 1. Walk-forward OOF (holdout öncesi sezonlar) ----
+    print("[1/4] Walk-forward değerlendirme çalışıyor (holdout öncesi sezonlar)...")
+    X_dev, y_dev = dev[feat_cols], dev["target"]
+    oof_probs, fold_metrics = walk_forward_eval(X_dev, y_dev, best_params, tscv)
 
-    # OOF tahmini olan satırlar
     valid_mask = ~np.isnan(oof_probs)
-    y_true  = y.values[valid_mask]
-    y_prob  = oof_probs[valid_mask]
-    y_pred  = (y_prob > 0.5).astype(int)
-
-    metrics = {
-        "accuracy":     accuracy_score(y_true, y_pred),
-        "auc":          roc_auc_score(y_true, y_prob),
-        "logloss":      log_loss(y_true, y_prob),
-        "brier":        brier_score_loss(y_true, y_prob),
-        "baseline_acc": y_true.mean(),  # "hep ev sahibi" baseline
-    }
-
+    oof = classification_metrics(y_dev.values[valid_mask], oof_probs[valid_mask])
     print(f"\n  OOF Toplam Metrikler:")
-    print(f"    Accuracy  : {metrics['accuracy']:.3f}  (baseline: {metrics['baseline_acc']:.3f})")
-    print(f"    AUC-ROC   : {metrics['auc']:.3f}")
-    print(f"    Log-Loss  : {metrics['logloss']:.4f}")
-    print(f"    Brier     : {metrics['brier']:.4f}")
+    print(f"    Accuracy  : {oof['accuracy']:.3f}  (baseline: {oof['baseline_acc']:.3f})")
+    print(f"    AUC-ROC   : {oof['auc']:.3f}")
+    print(f"    Log-Loss  : {oof['logloss']:.4f}")
+    print(f"    Brier     : {oof['brier']:.4f}")
 
-    # Sezon bazlı doğruluk
-    df_val = df[valid_mask].copy()
-    df_val["pred_prob"] = y_prob
-    df_val["correct"]   = (y_pred == y_true)
-    print(f"\n  Sezon-by-Sezon Accuracy:")
+    df_val = dev[valid_mask].copy()
+    df_val["correct"] = (oof_probs[valid_mask] > 0.5).astype(int) == y_dev.values[valid_mask]
+    print(f"\n  Sezon-by-Sezon Accuracy (OOF):")
     for sid in sorted(df_val["season_id"].unique()):
         sub = df_val[df_val["season_id"] == sid]
         print(f"    Sezon {sid}: {sub['correct'].mean():.3f}  ({len(sub)} maç)")
 
-    print("\n[2/3] Grafikler oluşturuluyor...")
-    plots = build_plots(y_true, y_prob, X.iloc[valid_mask], final_model)
+    # Kalibratör (Platt) holdout öncesi OOF tahminlerinden öğrenilir
+    platt = fit_platt(y_dev.values[valid_mask], oof_probs[valid_mask])
+
+    # ---- 2. Holdout (aramada hiç görülmemiş sezon) ----
+    holdout_metrics, ece, calib_rows, raw_holdout = None, None, [], None
+    calibration = None
+    cal_path = MODELS_DIR / "calibration.json"
+    if len(holdout):
+        print(f"\n[2/4] Holdout değerlendirmesi: sezon {holdout_season} ({len(holdout)} maç)...")
+        model = xgb.XGBClassifier(**best_params)
+        model.fit(X_dev, y_dev)
+        y_true = holdout["target"].values
+        y_raw = model.predict_proba(holdout[feat_cols])[:, 1]
+        raw_holdout = classification_metrics(y_true, y_raw)
+        raw_ece, _ = calibration_table(y_true, y_raw)
+
+        # Kalibrasyon sadece holdout'ta log-loss'u iyileştiriyorsa kullanılır
+        y_cal = apply_calibration(platt, y_raw)
+        cal_holdout = classification_metrics(y_true, y_cal)
+        cal_ece, _ = calibration_table(y_true, y_cal)
+        print(f"  Kalibrasyon (Platt a={platt['a']:.3f}, b={platt['b']:.3f}):")
+        print(f"    Ham         : log-loss {raw_holdout['logloss']:.4f}  ECE {raw_ece:.4f}")
+        print(f"    Kalibre     : log-loss {cal_holdout['logloss']:.4f}  ECE {cal_ece:.4f}")
+        if cal_holdout["logloss"] < raw_holdout["logloss"]:
+            calibration = platt
+            y_prob = y_cal
+            print("    → Kalibrasyon kullanılacak (models/calibration.json)\n")
+        else:
+            y_prob = y_raw
+            print("    → Kalibrasyon iyileştirmedi, kullanılmayacak\n")
+
+        holdout_metrics = classification_metrics(y_true, y_prob)
+        ece, calib_rows = calibration_table(y_true, y_prob)
+        print(f"    Accuracy  : {holdout_metrics['accuracy']:.3f}  (baseline: {holdout_metrics['baseline_acc']:.3f})")
+        print(f"    AUC-ROC   : {holdout_metrics['auc']:.3f}")
+        print(f"    Log-Loss  : {holdout_metrics['logloss']:.4f}")
+        print(f"    Brier     : {holdout_metrics['brier']:.4f}")
+        print(f"    ECE       : {ece:.4f}  (kalibrasyon hatası; 0 = mükemmel)")
+        print(f"\n  Kalibrasyon (holdout):  tahmin → gerçekleşen  (maç)")
+        for r in calib_rows:
+            print(f"    %{r['mean_pred']*100:5.1f} → %{r['frac_pos']*100:5.1f}  ({r['n']})")
+        plot_true, plot_prob, plot_X = y_true, y_prob, holdout[feat_cols]
+    else:
+        print("\n[2/4] Holdout yok (03 --no-holdout ile eğitilmiş) — grafikler OOF'tan.")
+        plot_true, plot_prob, plot_X = y_dev.values[valid_mask], oof_probs[valid_mask], X_dev[valid_mask]
+
+    # Başlık metrik: varsa holdout (dürüst), yoksa OOF
+    headline = holdout_metrics or oof
+
+    print("\n[3/4] Grafikler oluşturuluyor...")
+    plots = build_plots(plot_true, plot_prob, plot_X, final_model)
 
     # API/UI bu dosyadan okur (sabit değer yerine)
     metrics_out = {
-        "evaluated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
-        "n_oof_games":  int(valid_mask.sum()),
-        **{k: float(v) for k, v in metrics.items()},
+        "evaluated_at":    pd.Timestamp.now().isoformat(timespec="seconds"),
+        "headline":        "holdout" if holdout_metrics else "oof",
+        "holdout_season":  holdout_season if holdout_metrics else None,
+        "n_holdout_games": int(len(holdout)),
+        "n_oof_games":     int(valid_mask.sum()),
+        **headline,
+        "ece":             ece,
+        "calibration":     calib_rows,
+        "calibrated":      calibration is not None,
+        "holdout_raw":     raw_holdout,
+        "oof":             oof,
         "folds": [
             {k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in m.items()}
             for m in fold_metrics
@@ -303,9 +359,16 @@ def main():
     metrics_path.write_text(json.dumps(metrics_out, indent=2), encoding="utf-8")
     print(f"  → Metrikler: {metrics_path}")
 
-    print("[3/3] HTML raporu yazılıyor...")
+    # 05 canlı tahminde bu dosya varsa olasılıkları kalibre eder
+    if calibration:
+        cal_path.write_text(json.dumps(calibration, indent=2), encoding="utf-8")
+        print(f"  → Kalibrasyon: {cal_path}")
+    elif cal_path.exists():
+        cal_path.unlink()
+
+    print("[4/4] HTML raporu yazılıyor...")
     generate_html_report(
-        metrics, fold_metrics, plots, feat_cols,
+        oof, holdout_metrics, holdout_season, ece, fold_metrics, plots, feat_cols,
         REPORTS_DIR / "evaluation_report.html"
     )
 

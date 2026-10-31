@@ -25,7 +25,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
 from feature_engineering import build_team_game_log
-from season import nba_today
+from season import nba_today, season_str
 
 
 # ---------------------------------------------------------------------------
@@ -619,10 +619,20 @@ async def model_metrics():
     train = _read_json("train_meta.json")
     ev    = _read_json("metrics.json")
 
+    def _season_label(sid):
+        # '22025' -> '2025-26'
+        return season_str(int(str(sid)[1:])) if sid else None
+
     def _pct(v):
         return round(v * 100, 1) if v is not None else None
 
     return {
+        # Headline = holdout season (never seen while tuning) when available
+        'headline':         ev.get('headline'),
+        'holdoutSeason':    _season_label(ev.get('holdout_season')),
+        'nHoldoutGames':    ev.get('n_holdout_games'),
+        'ece':              ev.get('ece'),
+        'oofAccuracy':      _pct((ev.get('oof') or {}).get('accuracy')),
         'accuracy':         _pct(ev.get('accuracy')),
         'baselineAccuracy': _pct(ev.get('baseline_acc')),
         'aucRoc':           ev.get('auc'),

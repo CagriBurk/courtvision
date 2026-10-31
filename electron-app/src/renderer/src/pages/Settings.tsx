@@ -159,7 +159,12 @@ export default function Settings() {
                   : '—'
               ],
               ['Son eğitim', formatDateTr(metrics?.trainedAt)],
-              ['OOF doğruluk', metrics?.accuracy != null ? `%${metrics.accuracy}` : '—']
+              [
+                metrics?.headline === 'holdout'
+                  ? `Doğruluk (holdout ${metrics.holdoutSeason})`
+                  : 'OOF doğruluk',
+                metrics?.accuracy != null ? `%${metrics.accuracy}` : '—'
+              ]
             ]}
           />
         </Section>

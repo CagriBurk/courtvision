@@ -15,6 +15,11 @@ export interface FoldItem {
 // /api/model/metrics — written by 03_train_model.py and 04_evaluate_model.py.
 // Fields are null until those scripts have run.
 export interface ModelMetricsData {
+  headline: 'holdout' | 'oof' | null // which evaluation the headline numbers come from
+  holdoutSeason: string | null // "2025-26"
+  nHoldoutGames: number | null
+  ece: number | null // calibration error on the holdout season
+  oofAccuracy: number | null
   accuracy: number | null
   baselineAccuracy: number | null
   aucRoc: number | null

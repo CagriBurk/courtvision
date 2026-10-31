@@ -34,9 +34,11 @@ export default function ModelMetrics({ apiBase }: ModelMetricsProps) {
     data?.accuracy != null && data?.baselineAccuracy != null
       ? data.accuracy - data.baselineAccuracy
       : null
+  const headlineLabel =
+    data?.headline === 'holdout' ? `Holdout ${data.holdoutSeason}` : 'OOF'
   const metrics = [
     {
-      label: 'Accuracy (OOF)',
+      label: `Doğruluk (${headlineLabel})`,
       value: fmt(data?.accuracy, 1, '%'),
       sub:
         lift != null
@@ -49,7 +51,7 @@ export default function ModelMetrics({ apiBase }: ModelMetricsProps) {
     {
       label: 'Brier Score',
       value: fmt(data?.brierScore, 3),
-      sub: 'Kalibrasyon kalitesi',
+      sub: data?.ece != null ? `Kalibrasyon hatası: ${data.ece.toFixed(3)}` : 'Kalibrasyon kalitesi',
       color: 'text-purple-400'
     }
   ]
@@ -71,6 +73,14 @@ export default function ModelMetrics({ apiBase }: ModelMetricsProps) {
       </div>
 
       <div className="p-6 space-y-6">
+        {data?.headline === 'holdout' && (
+          <p className="text-slate-500 text-xs leading-relaxed">
+            Üstteki metrikler {data.holdoutSeason} sezonundan ({data.nHoldoutGames} maç): model bu
+            sezonu hiperparametre aramasında hiç görmeden tahmin etti. Fold tablosu holdout öncesi
+            sezonlardaki walk-forward değerlendirmedir (OOF doğruluk: %{data.oofAccuracy}).
+          </p>
+        )}
+
         {!data?.evaluatedAt && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-amber-300 text-xs">
             Değerlendirme metrikleri yok. Çalıştırın:{' '}

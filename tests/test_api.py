@@ -1,4 +1,5 @@
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 import sys
 from pathlib import Path
@@ -109,8 +110,8 @@ def test_today_games(mocker):
 
 def test_predictions_fresh_reads_meta(tmp_path, monkeypatch):
     import json
-    from datetime import date
     import api_server
+    from season import nba_today
 
     monkeypatch.setattr(api_server, "LIVE_DIR", tmp_path)
     assert api_server._predictions_fresh() is False  # no meta.json yet
@@ -118,7 +119,7 @@ def test_predictions_fresh_reads_meta(tmp_path, monkeypatch):
     (tmp_path / "meta.json").write_text(json.dumps({"date": "2000-01-01"}))
     assert api_server._predictions_fresh() is False  # stale
 
-    (tmp_path / "meta.json").write_text(json.dumps({"date": str(date.today())}))
+    (tmp_path / "meta.json").write_text(json.dumps({"date": str(nba_today())}))
     assert api_server._predictions_fresh() is True
 
 
@@ -144,3 +145,88 @@ def test_model_metrics_from_files(tmp_path, monkeypatch):
     assert data["dataPoints"] == 1234
     assert data["nTrials"] == 30
     assert data["foldMetrics"][0]["accuracy"] == 66.0
+
+
+def test_refresh_predictions_runs_once_at_a_time(monkeypatch):
+    import threading
+    import api_server
+
+    release = threading.Event()
+    calls = []
+
+    def fake_run():
+        calls.append(1)
+        release.wait(timeout=5)
+        api_server._predictions_running.clear()
+        return True
+
+    monkeypatch.setattr(api_server, "_run_predictions", fake_run)
+    monkeypatch.setattr("prediction_tracker.fill_results", lambda *a, **k: None)
+    api_server._predictions_running.clear()
+
+    first = client.post("/api/refresh-predictions").json()
+    assert first["started"] is True
+    # A second click while the first run is going must not start another one
+    second = client.post("/api/refresh-predictions").json()
+    assert second["started"] is False
+
+    release.set()
+    for _ in range(50):
+        if not api_server._predictions_running.is_set():
+            break
+        threading.Event().wait(0.05)
+    assert calls == [1]
+    assert not api_server._predictions_running.is_set()
+
+
+def test_history_after_results_filled(tmp_path, monkeypatch):
+    """save_predictions → fill_results → /api/history end to end."""
+    import api_server
+    import prediction_tracker
+
+    monkeypatch.setattr(prediction_tracker, "PRED_DIR", tmp_path)
+    monkeypatch.setattr(prediction_tracker, "PRED_LOG", tmp_path / "predictions_log.parquet")
+    monkeypatch.setattr(api_server, "PRED_DIR", tmp_path)
+
+    prediction_tracker.save_predictions([
+        {"game_id": "G1", "date": "2026-10-31", "home_team_abbr": "UTA", "home_team_id": 1,
+         "away_team_abbr": "POR", "away_team_id": 2, "prob_home": 0.28, "confidence": "YÜKSEK"},
+        {"game_id": "G2", "date": "2026-10-31", "home_team_abbr": "MEM", "home_team_id": 3,
+         "away_team_abbr": "SAC", "away_team_id": 4, "prob_home": 0.66, "confidence": "YÜKSEK"},
+        {"game_id": "G3", "date": "2026-10-31", "home_team_abbr": "HOU", "home_team_id": 5,
+         "away_team_abbr": "OKC", "away_team_id": 6, "prob_home": 0.48, "confidence": "DÜŞÜK"},
+    ])
+    # G1: away won (correct), G2: away won (wrong), G3: not played yet
+    master = pd.DataFrame({"game_id": ["G1", "G2"], "target": [0, 0]})
+    prediction_tracker.fill_results(master)
+
+    data = client.get("/api/history").json()
+    by_id = {r["gameId"]: r for r in data["predictions"]}
+    assert by_id["G1"]["correct"] is True
+    assert by_id["G2"]["correct"] is False
+    assert by_id["G3"]["correct"] is None
+    assert data["stats"]["completedGames"] == 2
+    assert data["stats"]["byTier"]["HIGH"] == {"correct": 1, "total": 2}
+
+
+def test_team_stats_from_master(tmp_path, monkeypatch):
+    import api_server
+
+    monkeypatch.setattr(api_server, "PROC_DIR", tmp_path)
+    pd.DataFrame({
+        "game_id": ["G1", "G2", "G3"],
+        "game_date": pd.to_datetime(["2026-10-25", "2026-10-27", "2026-10-29"]),
+        "season_id": "22026",
+        "team_id_home": ["1", "2", "1"],
+        "team_id_away": ["2", "1", "3"],
+        "target": [1, 1, 0],
+        "pts_home": [110, 105, 99], "pts_away": [100, 101, 104],
+        "plus_minus_home": [10, 4, -5], "plus_minus_away": [-10, -4, 5],
+    }).to_parquet(tmp_path / "master_games.parquet")
+
+    data = client.get("/api/team/1/stats?n_games=15").json()
+    assert data["summary"]["n_games"] == 3
+    # Team 1: won G1 at home, lost G2 away, lost G3 at home
+    assert [g["won"] for g in data["recent_games"]] == [1, 0, 0]
+    assert data["recent_games"][1]["pts_scored"] == 101
+    assert data["summary"]["last_game_date"] == "2026-10-29"

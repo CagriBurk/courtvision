@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import History from './pages/History'
@@ -14,7 +14,13 @@ const API_BASE = 'http://127.0.0.1:8765'
 const WATCHED_KEY = 'nba_watched_games'
 const NOTIF_BEFORE_MS = 30 * 60 * 1000 // 30 dakika
 
-async function fetchGamesFromApi(): Promise<{ games: Game[]; updating?: boolean }> {
+interface TodayGamesResponse {
+  date: string
+  games: Game[]
+  updating?: boolean
+}
+
+async function fetchGamesFromApi(): Promise<TodayGamesResponse> {
   const res = await fetch(`${API_BASE}/api/today-games`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
@@ -35,29 +41,47 @@ function parseGameTimeMs(timeStr: string): number | null {
 
 export default function App(): React.JSX.Element {
   const [page, setPage] = useState<NavPage>('dashboard')
-  const [selectedGame, setSelectedGame] = useState<Game | null>(null)
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['todayGames'],
     queryFn: fetchGamesFromApi,
     retry: 1,
-    // API generates today's predictions in the background after startup
-    refetchInterval: (query) => (query.state.data?.updating ? 3000 : false)
+    // While the API generates predictions poll fast; otherwise check every few
+    // minutes so a new day's slate (refreshed by the API scheduler) shows up.
+    refetchInterval: (query) => (query.state.data?.updating ? 3000 : 5 * 60 * 1000)
+  })
+
+  // "Veriyi Güncelle": API re-runs 05_predict_today.py in the background
+  const refresh = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${API_BASE}/api/refresh-predictions`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['todayGames'] })
   })
 
   const games = data?.games || []
-  const preparing = !!data?.updating && games.length === 0
+  const updating = !!data?.updating || refresh.isPending
+  const preparing = updating && games.length === 0
+
+  // When an update finishes, results of earlier days may have been filled in
+  const wasUpdating = useRef(false)
+  useEffect(() => {
+    if (wasUpdating.current && !updating) {
+      queryClient.invalidateQueries({ queryKey: ['history'] })
+    }
+    wasUpdating.current = updating
+  }, [updating, queryClient])
   const apiConnected = !isError && !isLoading
   const apiError = isError
     ? 'FastAPI sunucusuna bağlanılamadı. Sunucuyu başlatın:\npython -m uvicorn src.api_server:app --host 127.0.0.1 --port 8765'
     : null
 
-  // Ensure first game is selected when data is loaded
-  useEffect(() => {
-    if (games.length > 0 && !selectedGame) {
-      setSelectedGame(games[0])
-    }
-  }, [games, selectedGame])
+  // Selection is kept by id so refreshed data replaces the shown game
+  const selectedGame = games.find((g) => g.id === selectedGameId) ?? games[0] ?? null
 
   // Takip edilen maçlar (bildirim için)
   const [watchedGames, setWatchedGames] = useState<Set<string>>(() => {
@@ -151,11 +175,13 @@ export default function App(): React.JSX.Element {
           <Dashboard
             games={games}
             selectedGame={selectedGame}
-            onSelectGame={setSelectedGame}
+            onSelectGame={(game) => setSelectedGameId(game.id)}
+            slateDate={data?.date}
             isLoading={isLoading || preparing}
+            isUpdating={updating}
             apiConnected={apiConnected}
             apiError={apiError}
-            onRefresh={() => refetch()}
+            onRefresh={() => refresh.mutate()}
             watchedGames={watchedGames}
             onToggleWatch={toggleWatch}
           />

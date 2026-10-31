@@ -136,7 +136,8 @@ def fetch_season_wide(season_str: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def fetch_today_schedule(target_date: date) -> list[dict]:
     """
-    Fetches the schedule for a given date from the NBA API.
+    Fetches all games scheduled on a given date (US Eastern) from the NBA API.
+    game_status: 1=not started, 2=in progress, 3=finished
     """
     if not NBA_API_AVAILABLE:
         print("  nba_api is not installed. Returning empty schedule.")
@@ -155,12 +156,9 @@ def fetch_today_schedule(target_date: date) -> list[dict]:
     game_df = dfs[1]   # gameId, gameStatus, gameCode, gameStatusText ...
     team_df = dfs[2]   # gameId, teamId, teamTricode ... (home+away same table)
 
-    # gameStatus: 1=not started, 2=in progress, 3=finished
-    upcoming = game_df[game_df["gameStatus"] == 1]
-
     games = []
     seen_ids = set()
-    for _, row in upcoming.iterrows():
+    for _, row in game_df.iterrows():
         gid = str(row["gameId"])
         if gid in seen_ids:
             continue
@@ -185,6 +183,7 @@ def fetch_today_schedule(target_date: date) -> list[dict]:
             "home_team_id": int(home_row.iloc[0]["teamId"]),
             "away_team_id": int(away_row.iloc[0]["teamId"]),
             "status": str(row.get("gameStatusText", "")),
+            "game_status": int(row["gameStatus"]),
         })
 
     # Add team names
@@ -197,5 +196,6 @@ def fetch_today_schedule(target_date: date) -> list[dict]:
         g["away_team_name"] = a.get("full_name", str(g["away_team_id"]))
         g["away_team_abbr"] = a.get("abbreviation", "???")
 
-    print(f"  -> Found {len(games)} upcoming games")
+    n_upcoming = sum(g["game_status"] == 1 for g in games)
+    print(f"  -> Found {len(games)} games ({n_upcoming} not started)")
     return games

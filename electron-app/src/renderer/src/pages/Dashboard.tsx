@@ -9,7 +9,9 @@ interface DashboardProps {
   games: Game[]
   selectedGame: Game | null
   onSelectGame: (game: Game) => void
+  slateDate?: string
   isLoading?: boolean
+  isUpdating?: boolean
   apiConnected?: boolean
   apiError?: string | null
   onRefresh?: () => void
@@ -17,12 +19,17 @@ interface DashboardProps {
   onToggleWatch?: (gameId: string) => void
 }
 
-const today = new Date().toLocaleDateString('tr-TR', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric'
-})
+/** Slate date from the API ("2026-10-31", US Eastern) → "31 Ekim 2026 Cumartesi" */
+function formatSlateDate(iso?: string): string {
+  // Noon avoids the date shifting across time zones
+  const d = iso ? new Date(`${iso}T12:00:00`) : new Date()
+  return d.toLocaleDateString('tr-TR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  })
+}
 
 const filterBtnClass = (active: boolean) =>
   `px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
@@ -35,7 +42,9 @@ export default function Dashboard({
   games,
   selectedGame,
   onSelectGame,
+  slateDate,
   isLoading = false,
+  isUpdating = false,
   apiConnected = false,
   apiError = null,
   onRefresh,
@@ -66,7 +75,7 @@ export default function Dashboard({
                 <span className="text-red-400 text-xs font-semibold">CANLI</span>
               </div>
             </div>
-            <p className="text-slate-500 text-sm mt-0.5 capitalize">{today}</p>
+            <p className="text-slate-500 text-sm mt-0.5 capitalize">{formatSlateDate(slateDate)}</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -83,11 +92,11 @@ export default function Dashboard({
 
             <button
               onClick={onRefresh}
-              disabled={isLoading}
+              disabled={isLoading || isUpdating}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
             >
-              <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-              {isLoading ? 'Yükleniyor...' : 'Veriyi Güncelle'}
+              <RefreshCw size={14} className={isLoading || isUpdating ? 'animate-spin' : ''} />
+              {isUpdating ? 'Güncelleniyor...' : isLoading ? 'Yükleniyor...' : 'Veriyi Güncelle'}
             </button>
           </div>
         </div>

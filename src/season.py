@@ -5,7 +5,17 @@ NBA season helpers. The regular season starts in October, so dates from
 October onwards belong to the season starting that year.
 """
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+# NBA game dates follow US Eastern time. From Turkey, tonight's games tip off
+# after midnight local time, but they still belong to the previous US date.
+NBA_TZ = ZoneInfo("America/New_York")
+
+
+def nba_today() -> date:
+    """Today's date on the NBA schedule (US Eastern)."""
+    return datetime.now(NBA_TZ).date()
 
 
 def season_start_year(today: date | None = None) -> int:

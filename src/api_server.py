@@ -9,10 +9,10 @@ or directly: python src/api_server.py
 import json
 import pickle
 import subprocess
-import asyncio
 import sys
 import threading
-from datetime import date, datetime
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +23,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # src/ if inside src, add parent to sys.path'e ekle
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
+
+from feature_engineering import build_team_game_log
+from season import nba_today
 
 
 # ---------------------------------------------------------------------------
@@ -98,25 +101,33 @@ def _load_model():
     return True
 
 
+# Prediction runs (startup, scheduler, "Veriyi Güncelle") share one lock so
+# 05_predict_today.py never runs twice at the same time.
+_predictions_lock = threading.Lock()
+# Set while a run is pending or in progress; /api/today-games reports it as
+# "updating" and the frontend polls until it clears.
 _predictions_running = threading.Event()
+
+SCHEDULER_INTERVAL_SEC = 15 * 60
+
+
+def _live_date() -> str | None:
+    """Slate date of the current data/live files (written by 05_predict_today.py)."""
+    try:
+        return json.loads((LIVE_DIR / "meta.json").read_text(encoding="utf-8")).get("date")
+    except Exception:
+        return None
 
 
 def _predictions_fresh() -> bool:
-    """True if 05_predict_today.py already ran for today (data/live/meta.json)."""
-    try:
-        meta = json.loads((LIVE_DIR / "meta.json").read_text(encoding="utf-8"))
-        return meta.get("date") == str(date.today())
-    except Exception:
+    """True if 05_predict_today.py already ran for today's slate."""
+    return _live_date() == str(nba_today())
+
+
+def _run_predictions() -> bool:
+    """Run 05_predict_today.py (blocking). False if a run is already in progress."""
+    if not _predictions_lock.acquire(blocking=False):
         return False
-
-
-def _run_predictions_if_stale() -> None:
-    """If today's predictions are missing, regenerate them (blocking)."""
-    if _predictions_fresh():
-        print("[API] Today predictions are already up to date, skipping.")
-        return
-
-    print("[API] Predictions are old/missing — running 05_predict_today.py...")
     _predictions_running.set()
     try:
         script = ROOT / "src" / "05_predict_today.py"
@@ -129,8 +140,20 @@ def _run_predictions_if_stale() -> None:
             print(f"[API] predict_today error code: {result.returncode}")
         else:
             print("[API] Predictions updated.")
+        return True
     finally:
         _predictions_running.clear()
+        _predictions_lock.release()
+
+
+def _run_predictions_if_stale() -> None:
+    """If today's predictions are missing, regenerate them (blocking)."""
+    if _predictions_fresh():
+        print("[API] Today predictions are already up to date, skipping.")
+        return
+
+    print("[API] Predictions are old/missing — running 05_predict_today.py...")
+    _run_predictions()
 
 
 def _startup_background_jobs() -> None:
@@ -164,6 +187,20 @@ def _startup_background_jobs() -> None:
     except Exception as e:
         print(f"[API] injuries cache skipped: {e}")
 
+    _scheduler_loop()
+
+
+def _scheduler_loop() -> None:
+    """Keeps predictions current while the app stays open (new slate each day)."""
+    while True:
+        time.sleep(SCHEDULER_INTERVAL_SEC)
+        try:
+            if not _predictions_fresh():
+                print("[API] New day on the NBA schedule — refreshing predictions.")
+                _run_predictions()
+        except Exception as e:
+            print(f"[API] scheduler error: {e!r}")
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -190,11 +227,10 @@ def _logo_url(abbr: str) -> str:
 
 def _build_game_response(
     row: dict,
-    log: pd.DataFrame | None,
     injuries: dict | None = None,
     top_players: dict | None = None,
 ) -> dict:
-    """live_features satırını + team_game_log'u frontend Game arayüzüne çevirir."""
+    """live_features satırını frontend Game arayüzüne çevirir."""
     h_abbr = str(row.get('home_team_abbr') or '')
     a_abbr = str(row.get('away_team_abbr') or '')
 
@@ -205,19 +241,13 @@ def _build_game_response(
     a_tid = str(int(raw_aid)) if raw_aid is not None else ''
 
     # Form dizileri — son 10 maç (1=G, 0=M), kronolojik sıralı
-    def get_form(team_id: str) -> list[int]:
-        # Written by 05_predict_today.py from the freshly updated master table
-        side = 'home' if team_id == h_tid else 'away'
+    # Written by 05_predict_today.py from the freshly updated master table
+    def get_form(side: str) -> list[int]:
         seq = row.get(f'{side}_form_seq')
-        if seq is not None:
-            return [int(w) for w in seq]
-        if log is None or not team_id:
-            return []
-        tlog = log[log['team_id'] == team_id].sort_values('game_date').tail(10)
-        return [int(w) for w in tlog['won'].fillna(0).astype(int).tolist()]
+        return [int(w) for w in seq] if seq is not None else []
 
-    home_form = get_form(h_tid)
-    away_form = get_form(a_tid)
+    home_form = get_form('home')
+    away_form = get_form('away')
 
     # Kazanma faktörleri (WhyWinsPanel için)
     # Hem direkt kaydedilmiş alanları hem türetilmiş değerleri kullanır.
@@ -382,7 +412,7 @@ async def today_games():
 
     if not live_path.exists():
         return {
-            "date":     str(date.today()),
+            "date":     str(nba_today()),
             "games":    [],
             "count":    0,
             "updating": updating,
@@ -391,13 +421,6 @@ async def today_games():
 
     df = pd.read_parquet(live_path)
     df = df.where(pd.notna(df), None)
-
-    # team_game_log — form dizileri için (sadece gerekli kolonlar)
-    log = None
-    log_path = PROC_DIR / "team_game_log.parquet"
-    if log_path.exists():
-        log = pd.read_parquet(log_path, columns=["team_id", "game_date", "won"])
-        log["team_id"] = log["team_id"].astype(str)
 
     # Sakatlık ve oyuncu verisini yükle (cache'den hızlı)
     injuries   = {}
@@ -424,12 +447,12 @@ async def today_games():
         print(f"[API] failed to load player/injury: {e}")
 
     games = [
-        _build_game_response(dict(row), log, injuries, top_players)
+        _build_game_response(dict(row), injuries, top_players)
         for _, row in df.iterrows()
     ]
 
     return {
-        "date":     str(date.today()),
+        "date":     _live_date() or str(nba_today()),
         "games":    games,
         "count":    len(games),
         "updating": updating,
@@ -470,30 +493,26 @@ async def get_top_players(team_id: int, n: int = 5):
 # ---------------------------------------------------------------------------
 @app.post("/api/refresh-predictions")
 async def refresh_predictions():
-    """Updates predictions by fetching fresh data from nba_api."""
-    script = ROOT / "src" / "05_predict_today.py"
-    try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, str(script),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(ROOT),
-        )
+    """
+    Starts 05_predict_today.py in the background (fresh nba_api data) and
+    returns immediately; /api/today-games reports "updating" until it ends.
+    """
+    if _predictions_running.is_set():
+        return {"started": False, "message": "Tahminler zaten güncelleniyor."}
 
+    _predictions_running.set()  # visible to the very next poll
+
+    def job():
+        if not _run_predictions():
+            return
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise Exception("TimeoutExpired: Command timed out after 300 seconds")
+            from prediction_tracker import fill_results
+            fill_results()
+        except Exception as e:
+            print(f"[API] fill_results skipped: {e!r}")
 
-        if process.returncode == 0:
-            return {"success": True, "message": "Predictions updated."}
-        else:
-            stderr_text = stderr.decode('utf-8', errors='replace')
-            return {"success": False, "error": stderr_text[-1000:]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    threading.Thread(target=job, daemon=True).start()
+    return {"started": True}
 
 
 # ---------------------------------------------------------------------------
@@ -621,22 +640,23 @@ async def model_metrics():
 # ---------------------------------------------------------------------------
 @app.get("/api/team/{team_id}/stats")
 async def team_stats(team_id: int, n_games: int = 20):
-    """Takımın son n_games maçının rolling istatistiklerini döndürür."""
-    log_path = PROC_DIR / "team_game_log.parquet"
-    if not log_path.exists():
-        raise HTTPException(status_code=404, detail="team_game_log.parquet bulunamadı.")
+    """Takımın son n_games maçı (master_games — 05 her gün günceller)."""
+    master_path = PROC_DIR / "master_games.parquet"
+    if not master_path.exists():
+        raise HTTPException(status_code=404, detail="master_games.parquet bulunamadı.")
 
-    log = pd.read_parquet(log_path)
-    log["team_id"] = log["team_id"].astype(str)
-    team_log = log[log["team_id"] == str(team_id)].sort_values("game_date").tail(n_games)
+    tid = str(team_id)
+    master = pd.read_parquet(master_path)
+    games = master[
+        ((master["team_id_home"].astype(str) == tid) | (master["team_id_away"].astype(str) == tid))
+        & master["target"].notna()
+    ].sort_values("game_date").tail(n_games)
 
-    if team_log.empty:
+    if games.empty:
         raise HTTPException(status_code=404, detail=f"Takım bulunamadı: {team_id}")
 
-    team_log = team_log.where(pd.notna(team_log), None)
-    records = team_log[["game_date", "won", "pts_scored", "pts_allowed",
-                         "plus_minus", "fg_pct", "fg3_pct", "ast", "reb",
-                         "tov", "is_home"]].to_dict(orient="records")
+    team_log = build_team_game_log(games)
+    team_log = team_log[team_log["team_id"].astype(str) == tid].sort_values("game_date")
 
     recent = team_log.tail(10)
     summary = {
@@ -647,8 +667,13 @@ async def team_stats(team_id: int, n_games: int = 20):
         "pts_avg_L10":      float(recent["pts_scored"].mean()),
         "pts_allowed_L10":  float(recent["pts_allowed"].mean()),
         "point_diff_L10":   float(recent["plus_minus"].mean()),
-        "last_game_date":   str(team_log["game_date"].max()),
+        "last_game_date":   str(team_log["game_date"].max().date()),
     }
+
+    cols = ["game_date", "won", "pts_scored", "pts_allowed", "plus_minus",
+            "fg_pct", "fg3_pct", "ast", "reb", "tov", "is_home"]
+    records = team_log[cols].assign(game_date=team_log["game_date"].dt.strftime("%Y-%m-%d"))
+    records = records.astype(object).where(records.notna(), None).to_dict(orient="records")
 
     return {"summary": summary, "recent_games": records}
 

@@ -31,7 +31,7 @@ import pandas as pd
 from feature_engineering import build_feature_matrix
 from nba_data_client import NBA_API_AVAILABLE, fetch_season_wide, fetch_today_schedule
 from prediction_tracker import save_predictions, fill_results
-from season import current_season, season_id, season_start_year
+from season import current_season, nba_today, season_id, season_start_year
 
 # ---------------------------------------------------------------------------
 ROOT        = Path(__file__).parent.parent
@@ -321,7 +321,7 @@ def main(target_date: date | None = None):
         raise SystemExit("nba_api yüklü değil: pip install nba_api")
 
     if target_date is None:
-        target_date = date.today()
+        target_date = nba_today()
 
     print(f"\n{'='*60}")
     print(f"NBA Günlük Tahmin — {target_date}")
@@ -345,7 +345,7 @@ def main(target_date: date | None = None):
     games = fetch_today_schedule(target_date)
     live_path = LIVE_DIR / "live_features.parquet"
     if not games:
-        print("No games today or all games have finished.")
+        print("Bugün programda maç yok.")
         pd.DataFrame().to_parquet(live_path, index=False)
         write_live_meta(target_date, 0)
         fill_results(master)
@@ -354,7 +354,10 @@ def main(target_date: date | None = None):
     schedule_path = LIVE_DIR / "today_schedule.json"
     schedule_path.write_text(json.dumps(games, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Feature'lar (eğitimle aynı pipeline) + tahminler
+    # Feature'lar (eğitimle aynı pipeline) + tahminler.
+    # Başlamış/bitmiş maçlar da tahmin edilir: feature'lar sadece önceki
+    # günlerin maçlarına dayanır, gün içinde değişmez ve sızıntı yoktur.
+    # Böylece dashboard gün boyu bütün maçları gösterir.
     print("\nFeature'lar hesaplanıyor (eğitim pipeline'ı)...")
     live_feats = compute_live_features(master, games, target_date)
 
@@ -372,8 +375,10 @@ def main(target_date: date | None = None):
     report_path = REPORTS_DIR / f"predictions_{target_date.strftime('%Y-%m-%d')}.html"
     report_path.write_text(report_html, encoding="utf-8")
 
-    # Tahminleri kaydet, önceki günlerin sonuçlarını doldur
-    save_predictions(predictions)
+    # Takip kaydına sadece maç başlamadan yapılan tahminler girer (dürüst isabet oranı)
+    pre_tip = [p for p in predictions if p.get("game_status", 1) == 1]
+    if pre_tip:
+        save_predictions(pre_tip)
     fill_results(master)
 
     print(f"\n{'='*60}")
@@ -384,7 +389,7 @@ def main(target_date: date | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default=None,
-                        help="Prediction date (YYYY-MM-DD), varsayılan: bugün")
+                        help="Tahmin tarihi (YYYY-MM-DD), varsayılan: bugün (ABD Doğu saati)")
     args = parser.parse_args()
 
     target = date.fromisoformat(args.date) if args.date else None

@@ -63,6 +63,17 @@ def test_absent_star_counts_as_missing(league):
     assert feats_for(result, "A9")["missing_min_share"] == 0
 
 
+def test_long_absence_does_not_dilute_expected_minutes(league):
+    # STAR also misses games 8-10: still a 30-minute player when he misses game 12
+    team_games, players = league
+    players = players[~((players["player_id"] == "STAR") & players["game_id"].isin(["A8", "A9", "A10"]))]
+    result = compute_availability_features(team_games, players)
+
+    last = feats_for(result, "A11")
+    assert last["missing_min_share"] == pytest.approx(30 / 240)
+    assert last["n_missing_rotation"] == 1
+
+
 def test_traded_player_is_not_missing(league):
     team_games, players = league
     result = compute_availability_features(team_games, players)

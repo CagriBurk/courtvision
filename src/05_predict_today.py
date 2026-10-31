@@ -22,6 +22,7 @@ Usage:
 import argparse
 import json
 import pickle
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -264,7 +265,7 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "home_n_missing_rotation":  _int(row.get("home_n_missing_rotation")),
             "away_n_missing_rotation":  _int(row.get("away_n_missing_rotation")),
         }
-        print(f"  {g['home_team_abbr']} %{prob_home:.1%} | {g['away_team_abbr']} %{prob_away:.1%} [{conf}]")
+        print(f"  {g['home_team_abbr']} %{prob_home * 100:.1f} | {g['away_team_abbr']} %{prob_away * 100:.1f} [{conf}]")
         predictions.append(result)
 
     return predictions
@@ -480,6 +481,9 @@ def main(target_date: date | None = None):
 
 
 if __name__ == "__main__":
+    # Piped stdout (API subprocess) uses the Windows codepage; a player name
+    # like "Porziņģis" must not crash the run.
+    sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default=None,
                         help="Tahmin tarihi (YYYY-MM-DD), varsayılan: bugün (ABD Doğu saati)")

@@ -62,6 +62,8 @@ warnings.filterwarnings("ignore")
 REPORTS_DIR = ROOT / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+CALIBRATION_MIN_GAIN = 0.001  # holdout log-loss iyileşmesi bundan küçükse kalibrasyon kapalı
+
 
 # ---------------------------------------------------------------------------
 def load_artifacts():
@@ -301,20 +303,22 @@ def main():
         raw_holdout = classification_metrics(y_true, y_raw)
         raw_ece, _ = calibration_table(y_true, y_raw)
 
-        # Kalibrasyon sadece holdout'ta log-loss'u iyileştiriyorsa kullanılır
+        # Kalibrasyon sadece holdout'ta log-loss'u anlamlı ölçüde iyileştiriyorsa
+        # kullanılır (a≈1, b≈0 gibi küçük düzeltmeler gürültüdür)
         y_cal = apply_calibration(platt, y_raw)
         cal_holdout = classification_metrics(y_true, y_cal)
         cal_ece, _ = calibration_table(y_true, y_cal)
         print(f"  Kalibrasyon (Platt a={platt['a']:.3f}, b={platt['b']:.3f}):")
         print(f"    Ham         : log-loss {raw_holdout['logloss']:.4f}  ECE {raw_ece:.4f}")
         print(f"    Kalibre     : log-loss {cal_holdout['logloss']:.4f}  ECE {cal_ece:.4f}")
-        if cal_holdout["logloss"] < raw_holdout["logloss"]:
+        gain = raw_holdout["logloss"] - cal_holdout["logloss"]
+        if gain >= CALIBRATION_MIN_GAIN:
             calibration = platt
             y_prob = y_cal
-            print("    → Kalibrasyon kullanılacak (models/calibration.json)\n")
+            print(f"    → Kalibrasyon kullanılacak (log-loss -{gain:.5f}, models/calibration.json)\n")
         else:
             y_prob = y_raw
-            print("    → Kalibrasyon iyileştirmedi, kullanılmayacak\n")
+            print(f"    → Kalibrasyon kapalı (log-loss iyileşmesi {gain:.5f} < {CALIBRATION_MIN_GAIN})\n")
 
         holdout_metrics = classification_metrics(y_true, y_prob)
         ece, calib_rows = calibration_table(y_true, y_prob)

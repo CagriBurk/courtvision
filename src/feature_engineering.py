@@ -510,7 +510,8 @@ def pivot_to_game_level(
 # 5. Oyuncu eksikliği: bu maçta kim yok ve takım için ne kadar önemli?
 # ---------------------------------------------------------------------------
 AVAILABILITY_WINDOW = 10        # son N takım maçı → oyuncunun beklenen dakikası/katkısı
-ROTATION_MINUTES = 20.0         # rotasyon oyuncusu eşiği (beklenen dakika)
+AVAILABILITY_MIN_GAMES = 2      # pencerede en az bu kadar maç oynamış olmalı
+ROTATION_MINUTES = 20.0        # rotasyon oyuncusu eşiği (beklenen dakika)
 TEAM_MINUTES = 240.0            # 5 oyuncu × 48 dakika
 
 _BOX_COLS = ["min", "pts", "fgm", "fga", "ftm", "fta", "oreb", "dreb",
@@ -535,8 +536,11 @@ def compute_availability_features(
     For each team in each game: how much of the team's expected minutes and
     production is missing.
 
-    Pool    = players with minutes in the team's previous AVAILABILITY_WINDOW
-              games; expected minutes/value = their window average.
+    Pool    = players with minutes in at least AVAILABILITY_MIN_GAMES of the
+              team's previous AVAILABILITY_WINDOW games; expected minutes/value
+              = their average over the games they played (games they missed
+              would otherwise dilute a star returning from injury, or one whose
+              window reaches into last season's final weeks).
     Absent  = training: on the roster (their next appearance, at or after this
               date, is for this team — so traded or departed players don't
               count) but no minutes in this game.
@@ -604,10 +608,12 @@ def compute_availability_features(
         win = (idx - lo).astype(float)
         cum_m = np.concatenate([np.zeros((len(players), 1)), np.cumsum(minutes, axis=1)], axis=1)
         cum_v = np.concatenate([np.zeros((len(players), 1)), np.cumsum(value, axis=1)], axis=1)
+        cum_n = np.concatenate([np.zeros((len(players), 1)), np.cumsum(minutes > 0, axis=1)], axis=1)
+        n_played = cum_n[:, idx] - cum_n[:, lo]
+        pool = n_played >= AVAILABILITY_MIN_GAMES
         with np.errstate(invalid="ignore", divide="ignore"):
-            exp_min = np.where(win > 0, (cum_m[:, idx] - cum_m[:, lo]) / win, 0.0)
-            exp_val = np.where(win > 0, (cum_v[:, idx] - cum_v[:, lo]) / win, 0.0)
-        pool = exp_min > 0
+            exp_min = np.where(pool, (cum_m[:, idx] - cum_m[:, lo]) / n_played, 0.0)
+            exp_val = np.where(pool, (cum_v[:, idx] - cum_v[:, lo]) / n_played, 0.0)
 
         # Roster membership
         dates = tg["game_date"].values

@@ -268,6 +268,21 @@ def merge_line_score(master: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 6. Player box scores (oyuncu eksikliği feature'ları için)
+# ---------------------------------------------------------------------------
+def build_player_games() -> None:
+    files = sorted(CACHE_DIR.glob("players_*.parquet"))
+    if not files:
+        print("[6/6] Oyuncu verisi yok (06_update_data.py ile çekilir) — atlandı.")
+        return
+    players = pd.concat([pd.read_parquet(p) for p in files], ignore_index=True)
+    players = players.drop_duplicates(subset=["game_id", "player_id"])
+    out_path = PROC_DIR / "player_games.parquet"
+    players.to_parquet(out_path, index=False)
+    print(f"[6/6] Oyuncu box score'ları: {len(players)} satır, {len(files)} sezon → {out_path}")
+
+
+# ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
 def main():
@@ -298,6 +313,7 @@ def main():
 
     out_path = PROC_DIR / "master_games.parquet"
     master.to_parquet(out_path, index=False)
+    build_player_games()
 
     print(f"\n{'='*60}")
     print("SUMMARY")

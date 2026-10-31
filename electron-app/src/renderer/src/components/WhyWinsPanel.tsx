@@ -171,8 +171,13 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
 
       {/* Why wins section */}
       <div>
-        <p className="text-slate-400 text-xs font-medium mb-2 tracking-wide">
+        <p className="text-slate-400 text-xs font-medium tracking-wide">
           NEDEN {winner.abbreviation} KAZANIR?
+        </p>
+        <p className="text-slate-600 text-[10px] mb-2 mt-0.5">
+          {game.factorsSource === 'model'
+            ? 'Modelin kendi hesabı: her faktörün kazanma olasılığına etkisi (yüzde puan)'
+            : 'Öne çıkan istatistik farkları'}
         </p>
         <div className="space-y-2">
           {game.factors.map((factor, i) => {

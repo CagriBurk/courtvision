@@ -351,6 +351,22 @@ def _build_game_response(
             'positive': prob > 0.5,
         })
 
+    # Modelin kendi gerekçesi (05: SHAP katkıları) varsa kurallar yerine onu göster
+    factors_source = 'rules'
+    model_factors = row.get('model_factors')
+    if model_factors:
+        factors = [
+            {
+                'label':    f['label'],
+                'detail':   f"%{abs(f['effect']) * 100:.1f}",
+                'value':    min(round(abs(f['effect']) * 200), 20),
+                'positive': f['effect'] > 0,
+            }
+            for f in json.loads(model_factors)
+            if abs(f['effect']) >= 0.002
+        ]
+        factors_source = 'model'
+
     conf_raw = str(row.get('confidence') or 'DÜŞÜK')
     confidence = CONF_TR_EN.get(conf_raw, conf_raw)  # zaten EN ise geç
 
@@ -382,6 +398,7 @@ def _build_game_response(
         'awayScore':      _opt_int(row.get('away_score')),
         'venue':          '',
         'factors':        factors,
+        'factorsSource':  factors_source,
         'homeForm':       home_form,
         'awayForm':       away_form,
         'homeInjuries':   (injuries or {}).get(h_abbr, []),

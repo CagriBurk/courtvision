@@ -42,6 +42,7 @@ export interface Game {
   awayScore?: number | null
   venue: string
   factors: WinFactor[]
+  factorsSource?: 'model' | 'rules' // model = XGBoost SHAP katkıları, rules = elle yazılmış kurallar
   homeForm: number[] // son 10 maç: 1=G, 0=M
   awayForm: number[]
   homeInjuries?: InjuredPlayer[]

@@ -397,6 +397,8 @@ TEAM_FEATURE_COLS = (
     + ["won_std_L10", "pts_scored_std_L10", "plus_minus_std_L10"]
     # Elo/SRS/Rakip kalitesi (elo_srs.py'den gelir)
     + ["srs_L10", "srs_L5", "opp_quality_L10", "opp_quality_L5", "opp_pdiff_L10"]
+    # Oyuncu eksikliği (compute_availability_features, oyuncu verisi varsa)
+    + ["missing_min_share", "missing_value_share", "n_missing_rotation"]
 )
 
 
@@ -488,6 +490,10 @@ def pivot_to_game_level(
         ("srs_L5",           "diff_srs_L5"),
         ("opp_quality_L10",  "diff_opp_quality_L10"),
         ("opp_quality_L5",   "diff_opp_quality_L5"),
+        # Oyuncu eksikliği
+        ("missing_min_share",   "diff_missing_min_share"),
+        ("missing_value_share", "diff_missing_value_share"),
+        ("n_missing_rotation",  "diff_n_missing_rotation"),
     ]
 
     for col, diff_name in diff_pairs:
@@ -501,11 +507,149 @@ def pivot_to_game_level(
 
 
 # ---------------------------------------------------------------------------
-# 5. Full pipeline: master table → game-level feature matrix
+# 5. Oyuncu eksikliği: bu maçta kim yok ve takım için ne kadar önemli?
+# ---------------------------------------------------------------------------
+AVAILABILITY_WINDOW = 10        # son N takım maçı → oyuncunun beklenen dakikası/katkısı
+ROTATION_MINUTES = 20.0         # rotasyon oyuncusu eşiği (beklenen dakika)
+TEAM_MINUTES = 240.0            # 5 oyuncu × 48 dakika
+
+_BOX_COLS = ["min", "pts", "fgm", "fga", "ftm", "fta", "oreb", "dreb",
+             "ast", "stl", "blk", "tov", "pf"]
+
+
+def _game_score(pg: pd.DataFrame) -> pd.Series:
+    """Hollinger Game Score: tek maçlık katkıyı tek sayıya indirir."""
+    return (
+        pg["pts"] + 0.4 * pg["fgm"] - 0.7 * pg["fga"] - 0.4 * (pg["fta"] - pg["ftm"])
+        + 0.7 * pg["oreb"] + 0.3 * pg["dreb"] + pg["stl"] + 0.7 * pg["ast"]
+        + 0.7 * pg["blk"] - 0.4 * pg["pf"] - pg["tov"]
+    )
+
+
+def compute_availability_features(
+    team_games: pd.DataFrame,
+    player_games: pd.DataFrame,
+    absent_override: dict | None = None,
+) -> pd.DataFrame:
+    """
+    For each team in each game: how much of the team's expected minutes and
+    production is missing.
+
+    Pool    = players with minutes in the team's previous AVAILABILITY_WINDOW
+              games; expected minutes/value = their window average.
+    Absent  = training: on the roster (their next appearance, at or after this
+              date, is for this team — so traded or departed players don't
+              count) but no minutes in this game.
+              live: names from the injury report, given as
+              absent_override[(game_id, team_id)] = {player_id, ...}; the
+              roster is then "last appearance was for this team".
+
+    Rows without a box score and without an override get NaN.
+
+    Returns game_id, team_id, missing_min_share, missing_value_share,
+    n_missing_rotation.
+    """
+    absent_override = absent_override or {}
+    cols = ["missing_min_share", "missing_value_share", "n_missing_rotation"]
+
+    tg_all = team_games[["game_id", "game_date", "team_id"]].drop_duplicates(["game_id", "team_id"]).copy()
+    tg_all["team_id"] = tg_all["team_id"].astype(str)
+    tg_all["game_id"] = tg_all["game_id"].astype(str)
+    tg_all["game_date"] = pd.to_datetime(tg_all["game_date"])
+
+    pg = player_games.copy()
+    for c in ["player_id", "team_id", "game_id"]:
+        pg[c] = pg[c].astype(str)
+    pg["game_date"] = pd.to_datetime(pg["game_date"])
+    pg = pg[pg["game_date"] >= tg_all["game_date"].min()]
+    for c in _BOX_COLS:
+        pg[c] = pd.to_numeric(pg[c], errors="coerce").fillna(0.0)
+    pg = pg[pg["min"] > 0]
+    pg["value"] = _game_score(pg)
+
+    # Every player's appearances (any team), for roster membership
+    timeline = {
+        pid: (grp["game_date"].values, grp["team_id"].values)
+        for pid, grp in pg.sort_values("game_date").groupby("player_id", sort=False)
+    }
+
+    frames = []
+    for team_id, tg in tg_all.groupby("team_id", sort=False):
+        tg = tg.sort_values(["game_date", "game_id"]).reset_index(drop=True)
+        n = len(tg)
+        gidx = {gid: i for i, gid in enumerate(tg["game_id"])}
+        tp = pg[(pg["team_id"] == team_id) & pg["game_id"].isin(gidx)]
+        live_cols = {gidx[gid]: ids for (gid, tid), ids in absent_override.items()
+                     if str(tid) == team_id and gid in gidx}
+
+        result = np.full((n, len(cols)), np.nan)
+        if tp.empty:
+            frames.append(pd.DataFrame(result, columns=cols).assign(game_id=tg["game_id"], team_id=team_id))
+            continue
+
+        players = tp["player_id"].unique()
+        pidx = {p: j for j, p in enumerate(players)}
+        rows = tp["player_id"].map(pidx).values
+        gcols = tp["game_id"].map(gidx).values
+        minutes = np.zeros((len(players), n))
+        value = np.zeros((len(players), n))
+        minutes[rows, gcols] = tp["min"].values
+        value[rows, gcols] = tp["value"].values
+        has_box = np.zeros(n, dtype=bool)
+        has_box[gcols] = True
+
+        # Window averages over the previous AVAILABILITY_WINDOW team games
+        idx = np.arange(n)
+        lo = np.maximum(idx - AVAILABILITY_WINDOW, 0)
+        win = (idx - lo).astype(float)
+        cum_m = np.concatenate([np.zeros((len(players), 1)), np.cumsum(minutes, axis=1)], axis=1)
+        cum_v = np.concatenate([np.zeros((len(players), 1)), np.cumsum(value, axis=1)], axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            exp_min = np.where(win > 0, (cum_m[:, idx] - cum_m[:, lo]) / win, 0.0)
+            exp_val = np.where(win > 0, (cum_v[:, idx] - cum_v[:, lo]) / win, 0.0)
+        pool = exp_min > 0
+
+        # Roster membership
+        dates = tg["game_date"].values
+        member_next = np.zeros((len(players), n), dtype=bool)
+        member_last = np.zeros((len(players), n), dtype=bool)
+        for p, j in pidx.items():
+            p_dates, p_teams = timeline[p]
+            k = np.searchsorted(p_dates, dates, side="left")
+            member_next[j] = (k < len(p_dates)) & (p_teams[np.minimum(k, len(p_dates) - 1)] == team_id)
+            member_last[j] = (k > 0) & (p_teams[np.maximum(k - 1, 0)] == team_id)
+
+        member = member_next.copy()
+        absent = pool & member_next & (minutes == 0)
+        for i, ids in live_cols.items():
+            member[:, i] = member_last[:, i]
+            absent[:, i] = pool[:, i] & member_last[:, i] & np.isin(players, list(ids))
+
+        missing_min = (absent * exp_min).sum(axis=0)
+        missing_val = (absent * exp_val).sum(axis=0)
+        team_val = ((pool & member) * exp_val).sum(axis=0)
+        n_rot = (absent & (exp_min >= ROTATION_MINUTES)).sum(axis=0)
+
+        result[:, 0] = missing_min / TEAM_MINUTES
+        with np.errstate(invalid="ignore", divide="ignore"):
+            result[:, 1] = np.where(team_val > 0, missing_val / team_val, np.nan)
+        result[:, 2] = n_rot
+
+        valid = (has_box | np.isin(idx, list(live_cols))) & (win > 0)
+        result[~valid] = np.nan
+        frames.append(pd.DataFrame(result, columns=cols).assign(game_id=tg["game_id"], team_id=team_id))
+
+    return pd.concat(frames, ignore_index=True)[["game_id", "team_id"] + cols]
+
+
+# ---------------------------------------------------------------------------
+# 6. Full pipeline: master table → game-level feature matrix
 # ---------------------------------------------------------------------------
 def build_feature_matrix(
     master: pd.DataFrame,
     rolling_since: pd.Timestamp | None = None,
+    player_games: pd.DataFrame | None = None,
+    absent_override: dict | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Single entry point used by BOTH training (02_build_features.py) and
@@ -519,6 +663,10 @@ def build_feature_matrix(
         full season so L10 windows and season-to-date stats are unaffected.
         Elo and H2H always use the full history.
 
+    player_games / absent_override: player box scores and, for upcoming
+        games, injured players (see compute_availability_features). Without
+        player_games the availability features are simply not produced.
+
     Returns (game-level features, team log with rolling features).
     """
     master = master.copy()
@@ -529,6 +677,14 @@ def build_feature_matrix(
     team_log_feats = compute_team_rolling_features(team_log)
     team_log_feats = compute_opponent_quality(team_log_feats)
     team_log_feats = compute_srs(team_log_feats)
+
+    if player_games is not None and not player_games.empty:
+        avail = compute_availability_features(
+            team_log_feats[["game_id", "game_date", "team_id"]], player_games, absent_override
+        )
+        team_log_feats["team_id"] = team_log_feats["team_id"].astype(str)
+        team_log_feats["game_id"] = team_log_feats["game_id"].astype(str)
+        team_log_feats = team_log_feats.merge(avail, on=["game_id", "team_id"], how="left")
 
     elo_df = compute_elo(master)
     master_with_h2h = compute_h2h_features(master).merge(elo_df, on="game_id", how="left")

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -179,6 +181,47 @@ def get_team_top_players(team_id: int, n: int = 5, df: pd.DataFrame = None) -> l
         }
         for _, row in top.iterrows()
     ]
+
+
+# ---------------------------------------------------------------------------
+# İsim eşleştirme (ESPN ↔ NBA): "Nikola Jokić" ↔ "Nikola Jokic", "Jr." vb.
+# ---------------------------------------------------------------------------
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def normalize_player_name(name: str) -> str:
+    text = unicodedata.normalize("NFKD", str(name))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+    text = re.sub(r"[.'’`-]", " ", text)
+    tokens = [t for t in text.split() if t not in _NAME_SUFFIXES]
+    return " ".join(tokens)
+
+
+def match_player_ids(names: list[str], candidates: dict[str, str]) -> tuple[set[str], list[str]]:
+    """
+    names: injury report names; candidates: {player_id: NBA name} of the team.
+    Exact normalized match first, then a unique last-name match.
+    Returns (matched player_ids, unmatched names).
+    """
+    by_full = {normalize_player_name(n): pid for pid, n in candidates.items()}
+    by_last: dict[str, list[str]] = {}
+    for pid, n in candidates.items():
+        tokens = normalize_player_name(n).split()
+        if tokens:
+            by_last.setdefault(tokens[-1], []).append(pid)
+
+    matched, unmatched = set(), []
+    for name in names:
+        norm = normalize_player_name(name)
+        if norm in by_full:
+            matched.add(by_full[norm])
+            continue
+        last = norm.split()[-1] if norm else ""
+        if len(by_last.get(last, [])) == 1:
+            matched.add(by_last[last][0])
+        else:
+            unmatched.append(name)
+    return matched, unmatched
 
 
 # ---------------------------------------------------------------------------

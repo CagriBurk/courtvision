@@ -29,8 +29,14 @@ import numpy as np
 import pandas as pd
 
 from feature_engineering import build_feature_matrix
-from modeling import apply_calibration
-from nba_data_client import NBA_API_AVAILABLE, fetch_season_wide, fetch_today_schedule
+from modeling import apply_calibration, explain_prediction
+from nba_data_client import (
+    NBA_API_AVAILABLE,
+    fetch_player_season,
+    fetch_season_wide,
+    fetch_today_schedule,
+)
+from player_stats import get_injuries, match_player_ids
 from prediction_tracker import save_predictions, fill_results
 from season import current_season, nba_today, season_id, season_start_year
 
@@ -77,6 +83,59 @@ def refresh_current_season(master: pd.DataFrame, season: str) -> pd.DataFrame:
     return combined
 
 
+def refresh_current_players(season: str) -> pd.DataFrame | None:
+    """Re-fetch the season's player box scores and upsert player_games.parquet."""
+    path = PROC_DIR / "player_games.parquet"
+    existing = pd.read_parquet(path) if path.exists() else None
+    fresh = fetch_player_season(season)
+    if fresh.empty:
+        print(f"  [UYARI] {season} oyuncu verisi çekilemedi, mevcut veri kullanılıyor.")
+        return existing
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    fresh.to_parquet(CACHE_DIR / f"players_{season}.parquet", index=False)
+    if existing is not None:
+        existing = existing[~existing["game_id"].astype(str).isin(fresh["game_id"])]
+        fresh = pd.concat([existing, fresh], ignore_index=True)
+    fresh.to_parquet(path, index=False)
+    return fresh
+
+
+# Injury report statuses treated as "will not play"
+OUT_STATUSES = {"Out", "Doubtful"}
+
+
+def build_absent_override(games: list[dict], player_games: pd.DataFrame,
+                          injuries: dict, target_date: date) -> tuple[dict | None, list[str]]:
+    """
+    {(game_id, team_id): {player_id, ...}} of injured players for each upcoming
+    game, matched by name against each team's current roster (players whose
+    last appearance was for that team). None if the injury report is missing.
+    """
+    if not injuries:
+        return None, []
+
+    target_ts = pd.Timestamp(target_date)
+    recent = player_games[
+        (pd.to_datetime(player_games["game_date"]) < target_ts)
+        & (pd.to_datetime(player_games["game_date"]) >= target_ts - pd.Timedelta(days=400))
+    ]
+    last_team = recent.sort_values("game_date").groupby("player_id").tail(1)
+
+    override, unmatched = {}, []
+    for g in games:
+        for side in ("home", "away"):
+            team_id = str(g[f"{side}_team_id"])
+            abbr = g[f"{side}_team_abbr"]
+            roster = last_team[last_team["team_id"].astype(str) == team_id]
+            candidates = dict(zip(roster["player_id"].astype(str), roster["player_name"]))
+            names = [p["name"] for p in injuries.get(abbr, []) if p.get("status") in OUT_STATUSES]
+            ids, missed = match_player_ids(names, candidates)
+            override[(str(g["game_id"]), team_id)] = ids
+            unmatched += [f"{abbr}: {n}" for n in missed]
+    return override, unmatched
+
+
 # ---------------------------------------------------------------------------
 # 2. Live features through the training pipeline
 # ---------------------------------------------------------------------------
@@ -101,7 +160,9 @@ def build_pending_rows(games: list[dict], target_date: date) -> pd.DataFrame:
     ])
 
 
-def compute_live_features(master: pd.DataFrame, games: list[dict], target_date: date) -> pd.DataFrame:
+def compute_live_features(master: pd.DataFrame, games: list[dict], target_date: date,
+                          player_games: pd.DataFrame | None = None,
+                          absent_override: dict | None = None) -> pd.DataFrame:
     """Game-level feature rows for `games`, indexed by game_id."""
     target_ts = pd.Timestamp(target_date)
     history = master[master["game_date"] < target_ts]
@@ -113,6 +174,8 @@ def compute_live_features(master: pd.DataFrame, games: list[dict], target_date: 
     features, _ = build_feature_matrix(
         pd.concat([history, pending], ignore_index=True),
         rolling_since=rolling_since,
+        player_games=player_games,
+        absent_override=absent_override,
     )
     return features[features["game_id"].isin(pending["game_id"])].set_index("game_id")
 
@@ -156,6 +219,8 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
         X_live = row.reindex(feature_columns).to_frame().T.astype(float)
         raw_prob = model.predict_proba(X_live)[0][1]
         prob_home = float(apply_calibration(calibration, raw_prob))
+        # Modelin kendi gerekçesi (SHAP katkıları, okunur gruplara toplanmış)
+        model_factors = explain_prediction(model, X_live, calibration)
         prob_away = 1.0 - prob_home
         winner    = "HOME" if prob_home > 0.5 else "AWAY"
         conf      = "YÜKSEK" if max(prob_home, prob_away) >= 0.65 else \
@@ -168,6 +233,7 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "prob_away":        prob_away,
             "predicted_winner": winner,
             "confidence":       conf,
+            "model_factors":    json.dumps(model_factors, ensure_ascii=False),
             # Form özeti
             "home_form_L5":     _num(row.get("home_won_L5")),
             "home_form_L10":    _num(row.get("home_won_L10")),
@@ -192,6 +258,11 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "diff_season_pd":      _num(row.get("diff_season_pd")),
             "diff_srs_L10":        _num(row.get("diff_srs_L10")),
             "fatigue_diff_b2b":    _num(row.get("fatigue_diff_b2b")),
+            # Oyuncu eksikliği (sakatlık raporundan)
+            "home_missing_value_share": _num(row.get("home_missing_value_share")),
+            "away_missing_value_share": _num(row.get("away_missing_value_share")),
+            "home_n_missing_rotation":  _int(row.get("home_n_missing_rotation")),
+            "away_n_missing_rotation":  _int(row.get("away_n_missing_rotation")),
         }
         print(f"  {g['home_team_abbr']} %{prob_home:.1%} | {g['away_team_abbr']} %{prob_away:.1%} [{conf}]")
         predictions.append(result)
@@ -348,6 +419,7 @@ def main(target_date: date | None = None):
     season = current_season(target_date)
     print(f"Güncel sezon yenileniyor ({season})...")
     master = refresh_current_season(master, season)
+    player_games = refresh_current_players(season)
 
     # Maç programı
     games = fetch_today_schedule(target_date)
@@ -366,8 +438,21 @@ def main(target_date: date | None = None):
     # Başlamış/bitmiş maçlar da tahmin edilir: feature'lar sadece önceki
     # günlerin maçlarına dayanır, gün içinde değişmez ve sızıntı yoktur.
     # Böylece dashboard gün boyu bütün maçları gösterir.
+    absent_override = None
+    if player_games is not None:
+        absent_override, unmatched = build_absent_override(
+            games, player_games, get_injuries(force_refresh=True), target_date
+        )
+        if absent_override is None:
+            print("  [UYARI] Sakatlık raporu alınamadı — oyuncu eksikliği bilinmiyor (NaN)")
+        else:
+            n_out = sum(len(v) for v in absent_override.values())
+            print(f"  Sakatlık raporu: {n_out} oyuncu eksik olarak eşleşti")
+            if unmatched:
+                print(f"  Eşleşmeyen isimler (kadroda son maçı yok olabilir): {', '.join(unmatched)}")
+
     print("\nFeature'lar hesaplanıyor (eğitim pipeline'ı)...")
-    live_feats = compute_live_features(master, games, target_date)
+    live_feats = compute_live_features(master, games, target_date, player_games, absent_override)
 
     print("\nTahminler hesaplanıyor...")
     predictions = predict_games(games, live_feats, model, feature_columns, target_date, calibration)

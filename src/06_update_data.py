@@ -4,6 +4,7 @@
 Fetches NBA seasons with the nba_api LeagueGameLog endpoint,
 converts them to wide format (home+away on same row, game.csv format)
 and saves each season as parquet under data/api_cache/.
+Player box scores are fetched too (players_<season>.parquet).
 
 Completed seasons are cached; the current season is always re-fetched.
 
@@ -19,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from nba_data_client import NBA_API_AVAILABLE, fetch_season_wide
+from nba_data_client import NBA_API_AVAILABLE, fetch_player_season, fetch_season_wide
 from season import current_season, season_start_year, season_str
 
 # ---------------------------------------------------------------------------
@@ -37,6 +38,25 @@ def seasons_since(start_year: int) -> list[str]:
 
 def season_cache_path(season: str) -> Path:
     return CACHE_DIR / f"season_{season}.parquet"
+
+
+def player_cache_path(season: str) -> Path:
+    return CACHE_DIR / f"players_{season}.parquet"
+
+
+def get_player_season(season: str, force_refresh: bool = False) -> pd.DataFrame:
+    """Player box scores of a season (oyuncu eksikliği feature'ları için)."""
+    cache_path = player_cache_path(season)
+    if cache_path.exists() and not force_refresh and season != current_season():
+        return pd.read_parquet(cache_path)
+
+    players = fetch_player_season(season)
+    if players.empty:
+        print(f"  [UYARI] {season} oyuncu verisi gelmedi, atlanıyor.")
+        return players
+    players.to_parquet(cache_path, index=False)
+    print(f"  [KAYDEDİLDİ] {season}: {len(players)} oyuncu-maç → {cache_path.name}")
+    return players
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +99,7 @@ def main(seasons: list[str], force_refresh: bool = False):
         df = get_season(s, force_refresh=force_refresh)
         if not df.empty:
             all_frames.append(df)
+        get_player_season(s, force_refresh=force_refresh)
 
     if all_frames:
         combined = pd.concat(all_frames, ignore_index=True)

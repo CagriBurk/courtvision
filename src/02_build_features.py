@@ -35,9 +35,16 @@ def main():
     master["game_date"] = pd.to_datetime(master["game_date"])
     print(f"  → {len(master)} maç, {master.shape[1]} sütun")
 
+    player_path = PROC_DIR / "player_games.parquet"
+    player_games = pd.read_parquet(player_path) if player_path.exists() else None
+    if player_games is None:
+        print("  → Oyuncu verisi yok: oyuncu eksikliği feature'ları üretilmeyecek")
+    else:
+        print(f"  → Oyuncu box score: {len(player_games)} satır")
+
     # ---- 2. Ortak pipeline (05_predict_today.py ile aynı kod) ----
-    print("[2/3] Feature matrix oluşturuluyor (rolling, Elo, SRS, H2H)...")
-    features, team_log_feats = build_feature_matrix(master)
+    print("[2/3] Feature matrix oluşturuluyor (rolling, Elo, SRS, H2H, oyuncu eksikliği)...")
+    features, team_log_feats = build_feature_matrix(master, player_games=player_games)
 
     team_log_path = PROC_DIR / "team_game_log.parquet"
     team_log_feats.to_parquet(team_log_path, index=False)

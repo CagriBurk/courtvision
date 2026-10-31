@@ -131,6 +131,46 @@ def fetch_season_wide(season_str: str) -> pd.DataFrame:
     return convert_to_wide(raw, get_valid_team_ids())
 
 
+PLAYER_COLS = [
+    "SEASON_ID", "PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "GAME_ID", "GAME_DATE",
+    "MIN", "PTS", "FGM", "FGA", "FTM", "FTA", "OREB", "DREB",
+    "AST", "STL", "BLK", "TOV", "PF", "PLUS_MINUS",
+]
+
+
+def fetch_player_season(season_str: str) -> pd.DataFrame:
+    """
+    Every player box score line of a regular season (one API call).
+    Lowercase columns; one row = one player in one game.
+    """
+    if not NBA_API_AVAILABLE:
+        return pd.DataFrame()
+    print(f"  Fetching players: {season_str}...", end=" ", flush=True)
+    try:
+        gl = leaguegamelog.LeagueGameLog(
+            season=season_str,
+            season_type_all_star="Regular Season",
+            player_or_team_abbreviation="P",
+            league_id="00",
+            timeout=120,
+        )
+        time.sleep(SLEEP_SEC)
+        df = gl.get_data_frames()[0]
+        print(f"{len(df)} rows")
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return pd.DataFrame()
+
+    if df.empty:
+        return df
+    df = df[[c for c in PLAYER_COLS if c in df.columns]].copy()
+    df.columns = [c.lower() for c in df.columns]
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    for col in ["season_id", "player_id", "team_id", "game_id"]:
+        df[col] = df[col].astype(str)
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Daily schedule (ScoreboardV3)
 # ---------------------------------------------------------------------------

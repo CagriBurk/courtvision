@@ -230,3 +230,31 @@ def test_team_stats_from_master(tmp_path, monkeypatch):
     assert [g["won"] for g in data["recent_games"]] == [1, 0, 0]
     assert data["recent_games"][1]["pts_scored"] == 101
     assert data["summary"]["last_game_date"] == "2026-10-29"
+
+
+def test_game_response_fields_and_factors():
+    import api_server
+
+    row = {
+        "game_id": "G1", "home_team_abbr": "UTA", "away_team_abbr": "POR",
+        "home_team_id": 1610612762, "away_team_id": 1610612757,
+        "home_team_name": "Utah Jazz", "away_team_name": "Portland Trail Blazers",
+        "prob_home": 0.28, "confidence": "YÜKSEK",
+        "status": "Final", "game_status": 3, "game_time_utc": "2026-10-31T19:00:00Z",
+        "home_score": 101.0, "away_score": 112.0,
+        "elo_diff": -201.3, "home_streak": -3, "away_streak": 2,
+        "home_form_seq": [0, 1, 0, 0, 0],
+    }
+    game = api_server._build_game_response(row)
+
+    assert game["home"]["logoUrl"] == "https://cdn.nba.com/logos/nba/1610612762/global/L/logo.svg"
+    assert game["confidence"] == "HIGH"
+    assert game["gameStatus"] == 3
+    assert (game["homeScore"], game["awayScore"]) == (101, 112)
+    assert game["homeForm"] == [0, 1, 0, 0, 0]
+
+    elo = next(f for f in game["factors"] if f["label"] == "Elo Rating Farkı")
+    assert elo["positive"] is False          # favors the away team
+    assert elo["detail"] == "201 puan"
+    streak = next(f for f in game["factors"] if "Seri" in f["label"])
+    assert streak["detail"] == "UTA 3M · POR 2G"

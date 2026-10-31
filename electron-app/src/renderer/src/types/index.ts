@@ -8,8 +8,9 @@ export interface Team {
 
 export interface WinFactor {
   label: string
-  value: number // pozitif = ev sahibi lehine, negatif = deplasman lehine
-  positive: boolean
+  detail?: string // gösterilen gerçek değer, ör. "201 puan"
+  value: number // çubuk uzunluğu için göreli güç (0–20)
+  positive: boolean // true = ev sahibi lehine
 }
 
 export interface InjuredPlayer {
@@ -34,7 +35,11 @@ export interface Game {
   away: Team
   probHome: number // 0-1
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
-  gameTime: string
+  gameTime: string // NBA durum metni: "8:00 pm ET", "Q3 5:21", "Final"
+  gameTimeUtc?: string | null // "2026-10-31T23:00:00Z"
+  gameStatus?: number // 1=başlamadı, 2=oynanıyor, 3=bitti
+  homeScore?: number | null
+  awayScore?: number | null
   venue: string
   factors: WinFactor[]
   homeForm: number[] // son 10 maç: 1=G, 0=M

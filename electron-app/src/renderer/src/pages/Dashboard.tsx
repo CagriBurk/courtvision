@@ -2,6 +2,7 @@ import { RefreshCw, Zap, CheckCircle, Wifi, WifiOff, Terminal } from 'lucide-rea
 import { useState } from 'react'
 import { Game } from '../types'
 import PredictionCard from '../components/PredictionCard'
+import { isLive } from '../utils/game'
 
 type ConfFilter = 'ALL' | 'HIGH' | 'MEDIUM' | 'LOW'
 
@@ -61,6 +62,7 @@ export default function Dashboard({
   })
 
   const highConfidence = games.filter((g) => g.confidence === 'HIGH').length
+  const liveCount = games.filter(isLive).length
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -70,10 +72,12 @@ export default function Dashboard({
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-white font-bold text-xl">Günlük Tahminler</h1>
-              <div className="flex items-center gap-1.5 bg-red-500/15 border border-red-500/30 rounded-full px-2.5 py-0.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-red-400 text-xs font-semibold">CANLI</span>
-              </div>
+              {liveCount > 0 && (
+                <div className="flex items-center gap-1.5 bg-red-500/15 border border-red-500/30 rounded-full px-2.5 py-0.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-red-400 text-xs font-semibold">{liveCount} MAÇ CANLI</span>
+                </div>
+              )}
             </div>
             <p className="text-slate-500 text-sm mt-0.5 capitalize">{formatSlateDate(slateDate)}</p>
           </div>

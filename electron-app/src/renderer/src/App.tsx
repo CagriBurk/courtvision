@@ -9,6 +9,7 @@ import WhyWinsPanel from './components/WhyWinsPanel'
 import ModelHealthPanel from './components/ModelHealthPanel'
 import TeamDetailModal from './components/TeamDetailModal'
 import { Game, NavPage, Team } from './types'
+import { formatTipoff, tipoffMs } from './utils/game'
 
 const API_BASE = 'http://127.0.0.1:8765'
 const WATCHED_KEY = 'nba_watched_games'
@@ -24,19 +25,6 @@ async function fetchGamesFromApi(): Promise<TodayGamesResponse> {
   const res = await fetch(`${API_BASE}/api/today-games`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
-}
-
-/** "8:30 PM" veya "20:30" gibi saat string'ini bugünün ms timestamp'ine çevirir */
-function parseGameTimeMs(timeStr: string): number | null {
-  try {
-    const now = new Date()
-    const base = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    const dt = new Date(`${base} ${timeStr}`)
-    if (isNaN(dt.getTime())) return null
-    return dt.getTime()
-  } catch {
-    return null
-  }
 }
 
 export default function App(): React.JSX.Element {
@@ -100,7 +88,7 @@ export default function App(): React.JSX.Element {
 
   // Bildirimleri izlenen maçlara göre zamanla
   const scheduleNotif = useCallback((game: Game) => {
-    const gameMs = parseGameTimeMs(game.gameTime)
+    const gameMs = tipoffMs(game)
     if (!gameMs) return
     const delay = gameMs - Date.now() - NOTIF_BEFORE_MS
     if (delay <= 0) return
@@ -108,7 +96,7 @@ export default function App(): React.JSX.Element {
     const id = setTimeout(() => {
       if (Notification.permission === 'granted') {
         new Notification(`${game.home.abbreviation} vs ${game.away.abbreviation} — 30 dk kaldı`, {
-          body: `Tahmin: ${game.probHome >= 0.5 ? game.home.name : game.away.name} kazanır (${Math.round(Math.max(game.probHome, 1 - game.probHome) * 100)}%)`,
+          body: `Başlama: ${formatTipoff(game.gameTimeUtc)} · Tahmin: ${game.probHome >= 0.5 ? game.home.name : game.away.name} kazanır (%${Math.round(Math.max(game.probHome, 1 - game.probHome) * 100)})`,
           icon: game.home.logoUrl
         })
       }

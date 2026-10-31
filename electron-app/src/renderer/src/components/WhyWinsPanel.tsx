@@ -177,6 +177,8 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
         <div className="space-y-2">
           {game.factors.map((factor, i) => {
             const barWidth = Math.min(Math.abs(factor.value) * 5, 100)
+            // factor.positive is from the home team's side; color by the predicted winner
+            const supportsWinner = factor.positive === predictedHome
             return (
               <div key={i} className="bg-slate-800/40 rounded-lg p-2.5">
                 <div className="flex items-center justify-between mb-1.5">
@@ -184,25 +186,26 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
                     {factor.label}
                   </span>
                   <div className="flex items-center gap-1 shrink-0">
-                    {factor.positive ? (
+                    {supportsWinner ? (
                       <TrendingUp size={11} className="text-emerald-400" />
                     ) : (
                       <TrendingDown size={11} className="text-red-400" />
                     )}
-                    <span
-                      className={`text-xs font-bold ${
-                        factor.positive ? 'text-emerald-400' : 'text-red-400'
-                      }`}
-                    >
-                      {factor.positive ? '+' : ''}
-                      {factor.value}%
-                    </span>
+                    {factor.detail && (
+                      <span
+                        className={`text-xs font-bold ${
+                          supportsWinner ? 'text-emerald-400' : 'text-red-400'
+                        }`}
+                      >
+                        {factor.detail}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="h-1 bg-slate-700/80 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-700 ${
-                      factor.positive ? 'bg-emerald-500' : 'bg-red-500/80'
+                      supportsWinner ? 'bg-emerald-500' : 'bg-red-500/80'
                     }`}
                     style={{ width: `${barWidth}%` }}
                   />
@@ -238,7 +241,7 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
         <div className="bg-red-950/20 border border-red-500/20 rounded-xl p-3 space-y-3">
           <p className="text-red-400 text-xs font-medium tracking-wide flex items-center gap-1.5">
             <AlertTriangle size={11} />
-            SAKATLИК / ŞÜPHELI
+            SAKATLIK / ŞÜPHELİ
           </p>
           <InjuryList injuries={homeInjuries} label={`${game.home.abbreviation} (Ev)`} />
           <InjuryList injuries={awayInjuries} label={`${game.away.abbreviation} (Dep)`} />

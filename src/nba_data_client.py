@@ -178,12 +178,20 @@ def fetch_today_schedule(target_date: date) -> list[dict]:
         if home_row.empty or away_row.empty:
             continue
 
+        def score(team_row):
+            s = team_row.iloc[0].get("score")
+            return int(s) if pd.notna(s) else None
+
         games.append({
             "game_id": gid,
             "home_team_id": int(home_row.iloc[0]["teamId"]),
             "away_team_id": int(away_row.iloc[0]["teamId"]),
             "status": str(row.get("gameStatusText", "")),
             "game_status": int(row["gameStatus"]),
+            "game_time_utc": str(row.get("gameTimeUTC", "")),
+            # Scores are 0 before tip-off; only meaningful once the game started
+            "home_score": score(home_row) if int(row["gameStatus"]) > 1 else None,
+            "away_score": score(away_row) if int(row["gameStatus"]) > 1 else None,
         })
 
     # Add team names

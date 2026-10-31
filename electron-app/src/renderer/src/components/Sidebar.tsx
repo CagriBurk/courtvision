@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { LayoutDashboard, History, BarChart2, Settings } from 'lucide-react'
 import { NavPage } from '../types'
-import { NBA_LOGO } from '../data/mockData'
 import { useModelMetrics } from '../hooks/useModelMetrics'
 
 interface SidebarProps {
   activePage: NavPage
   onNavigate: (page: NavPage) => void
 }
+
+const NBA_LOGO = 'https://cdn.nba.com/logos/leagues/logo-nba.svg'
 
 const navItems = [
   { page: 'dashboard' as NavPage, label: 'Dashboard', icon: LayoutDashboard },

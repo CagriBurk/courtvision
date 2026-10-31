@@ -1,7 +1,17 @@
-import { Clock, MapPin, ChevronRight, AlertTriangle, Bell, BellOff } from 'lucide-react'
+import {
+  Clock,
+  MapPin,
+  ChevronRight,
+  AlertTriangle,
+  Bell,
+  BellOff,
+  CheckCircle,
+  XCircle
+} from 'lucide-react'
 import { useState } from 'react'
 import { Game, InjuredPlayer, Team, TopPlayer } from '../types'
 import WinProbBar from './WinProbBar'
+import { gameStatusLabel, isLive, lastName, predictionCorrect } from '../utils/game'
 
 interface PredictionCardProps {
   game: Game
@@ -32,7 +42,7 @@ function getCriticalOut(
   if (outList.length === 0) return null
   const topNames = new Set(topPlayers.map((p) => p.name))
   const star = outList.find((p) => topNames.has(p.name)) ?? outList[0]
-  return { name: star.name.split(' ').slice(-1)[0], extra: outList.length - 1 }
+  return { name: lastName(star.name), extra: outList.length - 1 }
 }
 
 function FormDots({ form }: { form: number[] }) {
@@ -85,6 +95,8 @@ export default function PredictionCard({
   const homeOut = getCriticalOut(game.homeInjuries ?? [], game.homeTopPlayers ?? [])
   const awayOut = getCriticalOut(game.awayInjuries ?? [], game.awayTopPlayers ?? [])
   const hasInjuryAlert = homeOut !== null || awayOut !== null
+  const live = isLive(game)
+  const correct = predictionCorrect(game)
 
   return (
     <button
@@ -146,9 +158,9 @@ export default function PredictionCard({
 
       {/* Footer */}
       <div className="flex items-center gap-3 mt-3 text-xs text-slate-500">
-        <span className="flex items-center gap-1">
-          <Clock size={10} />
-          {game.gameTime}
+        <span className={`flex items-center gap-1 ${live ? 'text-red-400 font-semibold' : ''}`}>
+          {live ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> : <Clock size={10} />}
+          {gameStatusLabel(game)}
         </span>
         {game.venue && (
           <span className="flex items-center gap-1 min-w-0">
@@ -191,8 +203,18 @@ export default function PredictionCard({
           <span className="text-xs text-blue-400 font-medium">
             Tahmin: {winner.abbreviation} kazanır
           </span>
+          {correct === true && (
+            <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium ml-1">
+              <CheckCircle size={11} /> Doğru
+            </span>
+          )}
+          {correct === false && (
+            <span className="flex items-center gap-1 text-xs text-red-400 font-medium ml-1">
+              <XCircle size={11} /> Yanlış
+            </span>
+          )}
         </div>
-        {onToggleWatch && (
+        {onToggleWatch && game.gameStatus !== 2 && game.gameStatus !== 3 && (
           <button
             onClick={(e) => {
               e.stopPropagation()

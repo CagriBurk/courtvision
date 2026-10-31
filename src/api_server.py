@@ -29,17 +29,8 @@ from season import nba_today
 
 
 # ---------------------------------------------------------------------------
-# Team color and logo mappings
+# Team colors
 # ---------------------------------------------------------------------------
-ESPN_ID: dict[str, str] = {
-    'ATL': 'atl', 'BOS': 'bos', 'BKN': 'bkn', 'CHA': 'cha', 'CHI': 'chi',
-    'CLE': 'cle', 'DAL': 'dal', 'DEN': 'den', 'DET': 'det', 'GSW': 'gs',
-    'HOU': 'hou', 'IND': 'ind', 'LAC': 'lac', 'LAL': 'lal', 'MEM': 'mem',
-    'MIA': 'mia', 'MIL': 'mil', 'MIN': 'min', 'NOP': 'no',  'NYK': 'ny',
-    'OKC': 'okc', 'ORL': 'orl', 'PHI': 'phi', 'PHX': 'phx', 'POR': 'por',
-    'SAC': 'sac', 'SAS': 'sa',  'TOR': 'tor', 'UTA': 'utah','WAS': 'wsh',
-}
-
 TEAM_COLORS: dict[str, str] = {
     'ATL': '#E03A3E', 'BOS': '#007A33', 'BKN': '#000000', 'CHA': '#1D1160',
     'CHI': '#CE1141', 'CLE': '#860038', 'DAL': '#00538C', 'DEN': '#0E2240',
@@ -220,9 +211,13 @@ async def startup_event():
 # ---------------------------------------------------------------------------
 # Yardımcı: live_features satırını frontend Game formatına dönüştür
 # ---------------------------------------------------------------------------
-def _logo_url(abbr: str) -> str:
-    espn_id = ESPN_ID.get(abbr, abbr.lower())
-    return f"https://a.espncdn.com/i/teamlogos/nba/500/{espn_id}.png"
+def _logo_url(team_id: str) -> str:
+    # NBA's own CDN (the ESPN logo CDN is blocked on some networks)
+    return f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"
+
+
+def _streak_str(s: int) -> str:
+    return f"{s}G" if s > 0 else f"{-s}M" if s < 0 else "-"
 
 
 def _build_game_response(
@@ -240,7 +235,6 @@ def _build_game_response(
     h_tid = str(int(raw_hid)) if raw_hid is not None else ''
     a_tid = str(int(raw_aid)) if raw_aid is not None else ''
 
-    # Form dizileri — son 10 maç (1=G, 0=M), kronolojik sıralı
     # Written by 05_predict_today.py from the freshly updated master table
     def get_form(side: str) -> list[int]:
         seq = row.get(f'{side}_form_seq')
@@ -249,113 +243,119 @@ def _build_game_response(
     home_form = get_form('home')
     away_form = get_form('away')
 
-    # Kazanma faktörleri (WhyWinsPanel için)
-    # Hem direkt kaydedilmiş alanları hem türetilmiş değerleri kullanır.
+    # Kazanma faktörleri (WhyWinsPanel için).
+    # positive = ev sahibi lehine; value = çubuk uzunluğu için göreli güç (0–20);
+    # detail = kullanıcıya gösterilen gerçek değer.
     factors = []
 
-    # Elo farkı — predict_games v2'de kaydediliyorsa kullan
     elo_diff = float(row.get('elo_diff') or 0)
     if abs(elo_diff) > 5:
         factors.append({
-            'label': 'Elo Rating Farkı',
-            'value': min(round(abs(elo_diff) / 10), 20),
+            'label':    'Elo Rating Farkı',
+            'detail':   f"{abs(elo_diff):.0f} puan",
+            'value':    min(round(abs(elo_diff) / 10), 20),
             'positive': elo_diff > 0,
         })
 
-    # Plus/minus farkı — kaydedilmişse veya form farkından türet
     pm_diff = float(row.get('diff_plus_minus_L10') or 0)
     if abs(pm_diff) > 0.5:
         factors.append({
-            'label': 'Plus/Minus Farkı (L10)',
-            'value': min(round(abs(pm_diff) * 2), 15),
+            'label':    'Sayı Farkı (son 10 maç)',
+            'detail':   f"{abs(pm_diff):.1f} sayı/maç",
+            'value':    min(round(abs(pm_diff) * 2), 15),
             'positive': pm_diff > 0,
         })
 
-    # Form farkı L5 — her zaman mevcut
+    # Form farkı L5 — plus/minus farkı yoksa göster
     h_f5 = float(row.get('home_form_L5') or 0)
     a_f5 = float(row.get('away_form_L5') or 0)
     form_diff = h_f5 - a_f5
     if abs(form_diff) > 0.15 and abs(pm_diff) <= 0.5:
+        h_w, a_w = round(h_f5 * 5), round(a_f5 * 5)
         factors.append({
-            'label': f"Son 5 Maç Formu ({int(h_f5 * 5)}G-{5 - int(h_f5 * 5)}M vs {int(a_f5 * 5)}G-{5 - int(a_f5 * 5)}M)",
-            'value': min(round(abs(form_diff) * 20), 12),
+            'label':    'Son 5 Maç Formu',
+            'detail':   f"{h_w}G-{5 - h_w}M / {a_w}G-{5 - a_w}M",
+            'value':    min(round(abs(form_diff) * 20), 12),
             'positive': form_diff > 0,
         })
 
-    # Seri farkı — her zaman mevcut
     h_streak = int(row.get('home_streak') or 0)
     a_streak = int(row.get('away_streak') or 0)
     streak_diff = h_streak - a_streak
     if abs(streak_diff) >= 3:
-        label = f"Ev Serisi G{h_streak}" if h_streak > 0 else f"Dep. Serisi G{a_streak}"
         factors.append({
-            'label': label,
-            'value': min(abs(streak_diff) * 2, 10),
+            'label':    'Galibiyet / Mağlubiyet Serisi',
+            'detail':   f"{h_abbr} {_streak_str(h_streak)} · {a_abbr} {_streak_str(a_streak)}",
+            'value':    min(abs(streak_diff) * 2, 10),
             'positive': streak_diff > 0,
         })
 
-    # B2B yorgunluk — her zaman mevcut
-    h_b2b = int(row.get('home_b2b') or 0)
-    a_b2b = int(row.get('away_b2b') or 0)
-    b2b_raw = float(row.get('fatigue_diff_b2b') or (h_b2b - a_b2b))
-    if b2b_raw != 0 or h_b2b != a_b2b:
-        diff_b2b = h_b2b - a_b2b
-        if diff_b2b != 0:
-            factors.append({
-                'label': 'B2B Yorgunluk Dezavantajı' if diff_b2b > 0 else 'Deplasman B2B Dezavantajı',
-                'value': 7,
-                'positive': diff_b2b < 0,
-            })
+    # Arka arkaya ikinci maç (yorgunluk)
+    diff_b2b = int(row.get('home_b2b') or 0) - int(row.get('away_b2b') or 0)
+    if diff_b2b != 0:
+        tired = h_abbr if diff_b2b > 0 else a_abbr
+        factors.append({
+            'label':    'Yorgunluk (arka arkaya 2. maç)',
+            'detail':   f"{tired} dün de oynadı",
+            'value':    7,
+            'positive': diff_b2b < 0,
+        })
 
-    # Dinlenme farkı
     h_rest = row.get('home_rest')
     a_rest = row.get('away_rest')
     if h_rest is not None and a_rest is not None:
         rest_diff = float(h_rest) - float(a_rest)
         if abs(rest_diff) >= 2 and len(factors) < 5:
             factors.append({
-                'label': 'Dinlenme Avantajı',
-                'value': min(round(abs(rest_diff) * 2), 8),
+                'label':    'Dinlenme Avantajı',
+                'detail':   f"{abs(rest_diff):.0f} gün fazla",
+                'value':    min(round(abs(rest_diff) * 2), 8),
                 'positive': rest_diff > 0,
             })
 
-    # H2H
+    # H2H: ev sahibinin bu rakibe karşı geçmişi
+    h2h_n = int(row.get('h2h_games') or 0)
     h2h_wr = float(row.get('h2h_home_wr') or 0.5)
-    if abs(h2h_wr - 0.5) > 0.05:
+    if h2h_n > 0 and abs(h2h_wr - 0.5) > 0.05:
         factors.append({
-            'label': 'H2H İç Saha Oranı',
-            'value': round(abs(h2h_wr - 0.5) * 20),
+            'label':    f"Karşılaşma Geçmişi ({h2h_n} maç)",
+            'detail':   f"{h_abbr} %{h2h_wr * 100:.0f} kazandı",
+            'value':    round(abs(h2h_wr - 0.5) * 20),
             'positive': h2h_wr > 0.5,
         })
 
-    # Sezon galibiyet oranı farkı
     wct_diff = float(row.get('diff_season_win_pct') or 0)
     if abs(wct_diff) > 0.02 and len(factors) < 5:
         factors.append({
-            'label': 'Sezon Galibiyet Oranı',
-            'value': min(round(abs(wct_diff) * 30), 12),
+            'label':    'Sezon Galibiyet Oranı',
+            'detail':   f"{abs(wct_diff) * 100:.0f} puan fark",
+            'value':    min(round(abs(wct_diff) * 30), 12),
             'positive': wct_diff > 0,
         })
 
-    # SRS farkı
     srs_diff = float(row.get('diff_srs_L10') or 0)
     if abs(srs_diff) > 0.5 and len(factors) < 5:
         factors.append({
-            'label': 'SRS Farkı (L10)',
-            'value': min(round(abs(srs_diff) * 2), 10),
+            'label':    'Rakip Gücüne Göre Sayı Farkı (SRS)',
+            'detail':   f"{abs(srs_diff):.1f}",
+            'value':    min(round(abs(srs_diff) * 2), 10),
             'positive': srs_diff > 0,
         })
 
     if not factors:
         prob = float(row.get('prob_home') or 0.5)
         factors.append({
-            'label': 'Model Prediction',
-            'value': round(abs(prob - 0.5) * 20),
+            'label':    'Model Tahmini',
+            'detail':   f"%{max(prob, 1 - prob) * 100:.0f}",
+            'value':    round(abs(prob - 0.5) * 20),
             'positive': prob > 0.5,
         })
 
     conf_raw = str(row.get('confidence') or 'DÜŞÜK')
     confidence = CONF_TR_EN.get(conf_raw, conf_raw)  # zaten EN ise geç
+
+    def _opt_int(v):
+        return int(v) if v is not None else None
 
     return {
         'id': str(row.get('game_id') or ''),
@@ -364,18 +364,22 @@ def _build_game_response(
             'name':         str(row.get('home_team_name') or ''),
             'abbreviation': h_abbr,
             'color':        TEAM_COLORS.get(h_abbr, '#1a1a2e'),
-            'logoUrl':      _logo_url(h_abbr),
+            'logoUrl':      _logo_url(h_tid),
         },
         'away': {
             'id':           a_tid,
             'name':         str(row.get('away_team_name') or ''),
             'abbreviation': a_abbr,
             'color':        TEAM_COLORS.get(a_abbr, '#1a1a2e'),
-            'logoUrl':      _logo_url(a_abbr),
+            'logoUrl':      _logo_url(a_tid),
         },
         'probHome':       float(row.get('prob_home') or 0.5),
         'confidence':     confidence,
         'gameTime':       str(row.get('status') or ''),
+        'gameTimeUtc':    row.get('game_time_utc') or None,
+        'gameStatus':     _opt_int(row.get('game_status')) or 1,
+        'homeScore':      _opt_int(row.get('home_score')),
+        'awayScore':      _opt_int(row.get('away_score')),
         'venue':          '',
         'factors':        factors,
         'homeForm':       home_form,
@@ -392,11 +396,20 @@ def _build_game_response(
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
+    try:
+        meta = json.loads((LIVE_DIR / "meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
     return {
-        "status":        "ok",
-        "model_loaded":  _model is not None,
-        "feature_count": len(_feature_columns) if _feature_columns else 0,
-        "timestamp":     datetime.now().isoformat(),
+        "status":           "ok",
+        "model_loaded":     _model is not None,
+        "feature_count":    len(_feature_columns) if _feature_columns else 0,
+        "timestamp":        datetime.now().isoformat(),
+        # Last 05_predict_today.py run (shown on the Settings page)
+        "live_date":        meta.get("date"),
+        "live_generated_at": meta.get("generated_at"),
+        "updating":         _predictions_running.is_set(),
+        "scheduler_minutes": SCHEDULER_INTERVAL_SEC // 60,
     }
 
 

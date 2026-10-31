@@ -70,9 +70,19 @@ async function getProjectRoot(): Promise<string | null> {
 let pythonProcess: ChildProcess | null = null
 const API_PORT = 8765
 
+// Projedeki .venv varsa onu kullan (sistem Python'unda paketler olmayabilir)
+function pythonExecutable(projectRoot: string): string {
+  const venvPython =
+    platform() === 'win32'
+      ? join(projectRoot, '.venv', 'Scripts', 'python.exe')
+      : join(projectRoot, '.venv', 'bin', 'python')
+  if (existsSync(venvPython)) return venvPython
+  return platform() === 'win32' ? 'python' : 'python3'
+}
+
 function startPythonServer(projectRoot: string): void {
-  const pythonCmd = platform() === 'win32' ? 'python' : 'python3'
-  console.log(`[main] Python başlatılıyor @ ${projectRoot}`)
+  const pythonCmd = pythonExecutable(projectRoot)
+  console.log(`[main] Python başlatılıyor @ ${projectRoot} (${pythonCmd})`)
 
   pythonProcess = spawn(
     pythonCmd,

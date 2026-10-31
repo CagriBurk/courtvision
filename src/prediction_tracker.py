@@ -278,6 +278,51 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
     return log
 
 
+def print_live_report() -> None:
+    """
+    Honest summary of live (pre-tip) predictions: accuracy with a 95% interval,
+    the "always pick the home team" baseline on the same games, and
+    probability quality (log-loss, Brier), to compare with models/metrics.json.
+    """
+    if not PRED_LOG.exists():
+        print("  Kayıt dosyası yok.")
+        return
+    log = pd.read_parquet(PRED_LOG)
+    done = log[log["correct"].notna()].copy()
+    pending = len(log) - len(done)
+    if done.empty:
+        print(f"  Henüz sonuçlanmış tahmin yok ({pending} tahmin sonuç bekliyor).")
+        return
+
+    import numpy as np
+
+    n = len(done)
+    correct = done["correct"].astype(float)
+    home_won = (done["actual_winner"] == "HOME").astype(float)
+    p = done["prob_home"].astype(float).clip(1e-6, 1 - 1e-6)
+    acc = correct.mean()
+    half = 1.96 * np.sqrt(acc * (1 - acc) / n)
+    logloss = float(-(home_won * np.log(p) + (1 - home_won) * np.log(1 - p)).mean())
+    brier = float(((p - home_won) ** 2).mean())
+
+    print(f"  Sonuçlanan maç      : {n}  (sonuç bekleyen: {pending})")
+    print(f"  Tarih aralığı       : {done['date'].min()} → {done['date'].max()}")
+    lo, hi = max(acc - half, 0.0), min(acc + half, 1.0)
+    print(f"  Doğruluk            : %{acc * 100:.1f}  (%95 aralık: %{lo * 100:.1f} – %{hi * 100:.1f})")
+    print(f"  Hep ev sahibi dese  : %{home_won.mean() * 100:.1f}")
+    print(f"  Log-loss / Brier    : {logloss:.4f} / {brier:.4f}")
+
+    print("\n  Güven seviyesine göre:")
+    for tier in ("HIGH", "MEDIUM", "LOW"):
+        t = done[done["confidence"] == tier]
+        if len(t):
+            print(f"    {tier:6s}: {int(t['correct'].sum())}/{len(t)}  (%{t['correct'].mean() * 100:.1f})")
+
+    print("\n  Günlük:")
+    for d, g in done.groupby("date"):
+        print(f"    {d}: {int(g['correct'].sum())}/{len(g)}")
+
+
 def _empty_stats() -> dict:
     return {
         "total": 0,
@@ -297,19 +342,12 @@ def _empty_stats() -> dict:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     # Sonuçları doldur ve istatistikleri yazdır
+    import sys
+    sys.stdout.reconfigure(errors="replace")
+
     print("Sonuçlar dolduruluyor...")
     fill_results()
+    fill_results_live(days_back=60)
 
-    print("\nİstatistikler:")
-    stats = get_stats()
-    if stats["total"] == 0:
-        print("  Henüz tamamlanmış tahmin yok.")
-    else:
-        print(f"  Toplam       : {stats['correct']}/{stats['total']} doğru")
-        print(f"  Ham Accuracy : {stats['raw_accuracy']}%")
-        print(f"  Ağırlıklı    : {stats['weighted_accuracy']}%")
-        print(f"  Son 7 gün    : {stats['last_7_days']['accuracy']}%")
-        print("\n  Tier bazlı:")
-        for tier, d in stats["by_tier"].items():
-            acc = f"{d['accuracy']}%" if d["accuracy"] is not None else "—"
-            print(f"    {tier:6s}: {d['correct']}/{d['total']} ({acc})")
+    print("\nCanlı tahmin raporu:")
+    print_live_report()

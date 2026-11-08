@@ -1,6 +1,6 @@
 # CourtVision — Günlük Kullanım ve Veri Toplama Planı
 
-Hazırlanma: 31 Ekim 2026 · Branch: `faz4-model`
+Hazırlanma: 31 Ekim 2026 · Güncelleme: 8 Kasım 2026 (Faz 5: handikap ve toplam)
 
 Amaç: Modeli değiştirmeden birkaç hafta boyunca her gün tahmin üretmek, sonuçların
 otomatik dolduğunu doğrulamak ve canlı isabet oranını ölçmek.
@@ -8,6 +8,8 @@ otomatik dolduğunu doğrulamak ve canlı isabet oranını ölçmek.
 **Kısaca:** Günde üç kez `CourtVision.bat`'a çift tıkla. Sabah açılışta her şey
 otomatik; öğlen ve akşam **"Veriyi Güncelle"**ye bas. Dünün tahminleri ertesi gün
 kendiliğinden kontrol edilir; sonuçlar **Geçmiş** sayfasında "Doğru/Yanlış" olarak görünür.
+Handikap, toplam ve skor aralıkları maç detay panelinde; okuma rehberi uygulamadaki
+**Nasıl Kullanılır** sayfasında ve aşağıda 11. bölümde.
 
 ---
 
@@ -90,6 +92,7 @@ Her tahmin çalışmasında şunlara benzer satırlar görmelisin:
 
 ```
 NBA Günlük Tahmin — 2026-11-02
+Handikap/toplam: margin, total | Kazanan olasılığı: sınıflandırıcı   ← "model yok" yazmamalı
   → Master güncellendi: ... maç (son: 2026-11-01)      ← dünün tarihi olmalı
   -> Found 9 games (9 not started)
   Sakatlık raporu: 18 oyuncu eksik olarak eşleşti
@@ -136,15 +139,21 @@ Kontrol listesi:
 
 ## 7. Birkaç hafta sonra değerlendirme
 
-**Referans (2025-26 holdout sezonu, 1225 maç):**
+**Referans (2025-26 holdout sezonu, 1225 maç; 8 Kasım 2026 eğitimi, 100 deneme):**
 
 | Ölçüt | Değer |
 |---|---|
-| Doğruluk | %69.5 |
-| Log-loss | 0.587 |
-| Brier | 0.201 |
+| Doğruluk | %69.3 |
+| Log-loss | 0.586 |
+| Brier | 0.200 |
 | Hep ev sahibi | %55.4 |
 | Yalnız Elo ile | %66.5 doğruluk, 0.614 log-loss |
+| Fark (handikap) ortalama hatası | 11.1 sayı (Elo tabanı 11.6) |
+| Toplam sayı ortalama hatası | 15.4 sayı (son 10 maç tabanı 15.35, tahmin gücü düşük) |
+
+Handikap ve toplam için canlı karşılaştırma: Geçmiş sayfasındaki ortalama hata kartları ya da
+`python src/prediction_tracker.py` çıktısının sonundaki "Fark (handikap)" ve "Toplam sayı" bölümleri.
+Canlıda handikap ortalama hatası 11 civarında, toplamınki 15 civarında kalıyorsa model beklendiği gibi.
 
 **Belirsizlik:** Birkaç haftalık veri sadece kaba bir resim verir. %69 civarı bir
 doğruluk için %95 aralığın genişliği:
@@ -169,9 +178,10 @@ doğruluk için %95 aralığın genişliği:
 
 Ölçümün temiz kalması için modeli ve kodu sabit tut:
 
-- `03_train_model.py` / `04_evaluate_model.py` çalıştırma (model değişir, ölçüm karışır).
+- `03_train_model.py` / `04_evaluate_model.py` / `MODEL_EGIT.bat` çalıştırma (model değişir, ölçüm karışır).
+  Yeniden eğitim için 12. bölüme bak; ölçüm döneminin sonunda yap.
 - `06_update_data.py` veya `01`/`02`'yi çalıştırma. Günlük veri güncellemesini uygulama kendisi yapar.
-- Branch değiştirme, `git pull` yapma. `faz4-model`'de kal.
+- Branch değiştirme, `git pull` yapma.
 - `data/predictions/predictions_log.parquet` dosyasını silme veya taşıma. Bütün canlı kayıt bu dosyada.
   İstersen haftada bir başka bir yere kopyala.
 
@@ -206,11 +216,56 @@ Veri toplamayı normal sezon sonunda bitirmek en temizi.
 Önce 6. bölümdeki raporu çalıştırıp sonuçlara bak. Ardından 31 Ekim değerlendirmesindeki
 plana dön:
 
-- **A — Toparlama:** `faz4-model`'i main'e merge et, eski branch'leri ve şablon
-  dosyalarını temizle, README'yi yeniden yaz, playoff uyarısı ekle, ilk maçtan önce
-  otomatik güncelleme ekle.
+- **A — Toparlama:** eski branch'leri ve şablon dosyalarını temizle, README'yi yeniden
+  yaz, playoff uyarısı ekle, ilk maçtan önce otomatik güncelleme ekle.
 - **B — Model:** Birden çok sezonda güven aralıklı değerlendirme; daha sade model
   (lojistik regresyon, 215 yerine 20–30 feature ile holdout'ta XGBoost kadar iyi);
   son sezonlara ağırlık; bahis oranlarıyla kıyas.
 
 Canlı sonuçlar bu kararlar için ilk gerçek veri olacak.
+
+---
+
+## 11. Handikap, toplam ve skor aralıkları nasıl okunur
+
+Bir maça tıkla; sağ paneldeki **Handikap & Toplam** bölümü:
+
+- **Adil çizgi:** modelin iki tarafa da %50 şans verdiği barem. Adil handikap `LAL -12.5`
+  ise model "LAL 13+ farkla kazanır" ile "kazanamaz" arasında kararsız.
+- **Adil oran = 1 / olasılık.** %62'lik bir seçeneğin adil oranı 1.61. iddaa'nın oranı
+  adil orandan **belirgin şekilde yüksekse** (yaklaşık %5) model o bahsi değerli görür.
+  Uygulamadaki **Nasıl Kullanılır** sayfasında küçük bir değer hesaplayıcı var.
+- **Handikap merdiveni:** favori tarafın seçenekleri en güvenliden en riskliye sıralı.
+  Handikap büyüdükçe olasılık düşer, adil oran yükselir. "Diğer tarafı göster" ile karşı
+  takımın seçenekleri. iddaa'nın aynı maç için açtığı baremlerden en iyi fiyatlananı seç.
+- **Kazanma farkı bantları:** 1-5, 6-10, 11-15, 16-20, 21-25, 26+ için olasılık ve adil oran.
+- **Toplam sayı:** her barem için üst / alt olasılığı. "Tahmin gücü düşük" etiketi: model
+  iki takımın son 10 maç ortalamasından iyi değil. Olasılıklar dürüst ama avantaj sağlamaz;
+  iddaa çizgisi adil çizgiden birkaç sayı uzaksa bakmaya değer.
+- **Tahmini skor:** her takım için en olası 10 sayılık aralık. Bir takımın skoru ±11-12 sayı
+  oynadığı için bu aralık bile en fazla ~%33 ihtimal taşır.
+
+İpuçları: handikap toplamdan güvenilirdir; kombinede bahis şirketinin marjı çarpılır; aynı
+maçtan iki seçimi (kazanan + handikap) aynı kupona koyma, birbirlerine bağlıdırlar.
+
+---
+
+## 12. Modeli yeniden eğitmek
+
+Ölçüm dönemlerinin arasında, sezonda ayda bir yeterli.
+
+1. Uygulamayı kapat.
+2. Proje klasöründeki **`MODEL_EGIT.bat`**'a çift tıkla (yaklaşık 2 saat). Sırasıyla özellik
+   tablosunu kurar, kazanan + fark + toplam modellerini 100 denemeyle eğitir ve değerlendirir.
+3. Bitince çıktının sonundaki holdout sonuçlarına bak (kazanan doğruluğu, fark/toplam ortalama
+   hatası, "Kazanan olasılığı: sınıflandırıcı mı, fark modeli mi?"). Uygulamayı yeniden aç.
+
+Elle çalıştırmak istersen aynı adımlar:
+
+```powershell
+cd C:\Users\cbura\Desktop\courtvision
+.\.venv\Scripts\Activate.ps1
+python src/02_build_features.py
+python src/03_train_model.py --task all --trials 100
+python src/04_evaluate_model.py
+```

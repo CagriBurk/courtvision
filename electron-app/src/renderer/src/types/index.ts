@@ -95,7 +95,7 @@ export interface GameLines {
   } | null
 }
 
-export type NavPage = 'dashboard' | 'history' | 'metrics' | 'settings'
+export type NavPage = 'dashboard' | 'history' | 'metrics' | 'guide' | 'settings'
 
 export interface PredictionRecord {
   gameId: string

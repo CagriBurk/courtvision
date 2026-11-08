@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import History from './pages/History'
 import ModelMetrics from './pages/ModelMetrics'
 import Settings from './pages/Settings'
+import Guide from './pages/Guide'
 import WhyWinsPanel from './components/WhyWinsPanel'
 import ModelHealthPanel from './components/ModelHealthPanel'
 import TeamDetailModal from './components/TeamDetailModal'
@@ -176,6 +177,7 @@ export default function App(): React.JSX.Element {
         )}
         {page === 'history' && <History apiBase={API_BASE} />}
         {page === 'metrics' && <ModelMetrics apiBase={API_BASE} />}
+        {page === 'guide' && <Guide />}
         {page === 'settings' && <Settings />}
       </main>
 

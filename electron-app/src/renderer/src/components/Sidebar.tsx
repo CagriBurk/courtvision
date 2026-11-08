@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LayoutDashboard, History, BarChart2, Settings } from 'lucide-react'
+import { LayoutDashboard, History, BarChart2, BookOpen, Settings } from 'lucide-react'
 import { NavPage } from '../types'
 import { useModelMetrics } from '../hooks/useModelMetrics'
 
@@ -14,6 +14,7 @@ const navItems = [
   { page: 'dashboard' as NavPage, label: 'Dashboard', icon: LayoutDashboard },
   { page: 'history' as NavPage, label: 'Geçmiş', icon: History },
   { page: 'metrics' as NavPage, label: 'Model Metrikleri', icon: BarChart2 },
+  { page: 'guide' as NavPage, label: 'Nasıl Kullanılır', icon: BookOpen },
   { page: 'settings' as NavPage, label: 'Ayarlar', icon: Settings }
 ]
 

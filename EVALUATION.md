@@ -67,3 +67,29 @@ If you want to continue working on this project today, I recommend following thi
 3. **Advanced ML Capabilities (Week 3+)**
    - Implement Player-level features. Currently, it seems mostly team-based. Player impact models (like RAPTOR or BPM) can significantly improve the accuracy (e.g., predicting a huge drop-off if Nikola Jokic sits out).
    - Add a scheduled background job to keep the data updated automatically without manual script execution.
+---
+
+## Faz 5 — Handikap ve toplam sayı modelleri (8 Kasım 2026)
+
+Holdout: 2025-26 sezonu (1225 maç, Optuna aramasında hiç görülmedi). Üç model de 100 Optuna
+denemesiyle, 2001-02'den itibaren 30.194 maçta eğitildi.
+
+| Model | Ölçüt | Model | Taban |
+|---|---|---|---|
+| Kazanan | doğruluk / log-loss | %69.3 / 0.5856 | hep ev sahibi %55.4 |
+| Fark (ev − dep.) | ortalama hata (MAE) | 11.07 sayı | Elo farkından doğrusal 11.61 |
+| Toplam sayı | ortalama hata (MAE) | 15.38 sayı | iki takımın son 10 maç ortalaması 15.35 |
+
+Bulgular:
+
+- **Fark modeli tabanı geçiyor**, ama tahminleri ortalamaya sıkıştırıyor (gerçek fark ≈ 1.22 ×
+  tahmin). Hata dağılımı bu yüzden düzeltilmiş ortalama + ampirik şekille kuruldu; 12 aday
+  arasından holdout CRPS'e göre seçildi. 26+ farkla biten maç oranı %8.3'ten %11.5'e çıktı
+  (gerçek %12.6), 1-5 farkla bitenler %27.3'ten %25.9'a indi (gerçek %24.5). ±8 sayılık barem
+  merdiveninde kalibrasyon hatası (ECE) %2.0.
+- **Toplam modeli tabanı geçemiyor.** Sezon içi toplam dalgalanmasının yalnızca ~%6'sı maç
+  öncesi veriden açıklanabiliyor (fark için ~%25). Hücum sayısına dayalı tempo, 100 hücum başına
+  verim, lig trendi ve tabana göre artık öğrenme denendi (`src/08_line_experiment.py`); hiçbiri
+  anlamlı kazanç getirmedi. Toplam, uygulamada "tahmin gücü düşük" etiketiyle gösteriliyor.
+- **Kazanan olasılığı** sınıflandırıcıdan geliyor: P(fark > 0) holdout log-loss'u 0.5847, fark
+  0.001 eşiğinin altında.

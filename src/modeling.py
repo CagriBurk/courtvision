@@ -142,6 +142,20 @@ def classification_metrics(y_true, y_prob) -> dict:
     }
 
 
+def regression_metrics(y_true, y_pred) -> dict:
+    """Point-prediction quality in points. bias > 0: the model predicts too high."""
+    y_true = np.asarray(y_true, dtype=float)
+    err = np.asarray(y_pred, dtype=float) - y_true
+    return {
+        "mae":      float(np.abs(err).mean()),
+        "rmse":     float(np.sqrt(np.mean(err ** 2))),
+        "bias":     float(err.mean()),
+        "within_5":  float((np.abs(err) <= 5).mean()),
+        "within_10": float((np.abs(err) <= 10).mean()),
+        "n":        int(len(y_true)),
+    }
+
+
 def _logit(p):
     p = np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
     return np.log(p / (1 - p))

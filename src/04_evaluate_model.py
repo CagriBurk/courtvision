@@ -1,7 +1,7 @@
 """
 04_evaluate_model.py
 --------------------
-Measures model performance two ways:
+Measures each model two ways:
 
   1. Walk-forward OOF on the seasons before the holdout (5-fold
      TimeSeriesSplit with the tuned parameters).
@@ -9,21 +9,31 @@ Measures model performance two ways:
      held-out season, which Optuna never saw. This is the honest headline
      number; calibration is measured here too.
 
+Win model: accuracy / AUC / log-loss, Platt calibration decision.
+Margin and total models: MAE / RMSE / bias against a simple baseline, plus
+the error distribution (score_dist.py) that prices betting lines. Its
+spread comes from the most recent OOF folds, its shape (normal or
+empirical) is chosen by line calibration on the holdout.
+When both win and margin are evaluated, the home win probability shown in
+the app comes from whichever has the lower holdout log-loss (win_source).
+
 Input :
   data/processed/features.parquet
-  models/xgb_best.pkl
   models/feature_columns.pkl
-  models/train_meta.json      (best params + holdout season, from 03)
+  models/xgb_best.pkl, models/train_meta*.json   (from 03)
 
 Output :
-  models/metrics.json             (read by the API/UI)
-  reports/evaluation_report.html
-  Console: fold-by-fold, holdout and per-season metrics
+  models/metrics.json             (win model, read by the API/UI)
+  models/metrics_margin.json, models/metrics_total.json
+  models/distribution.json        (error distributions, read by 05)
+  reports/evaluation_report.html  (win model)
 
 Usage:
-    python src/04_evaluate_model.py
+    python src/04_evaluate_model.py                 # win + margin + total
+    python src/04_evaluate_model.py --task margin
 """
 
+import argparse
 import json
 import pickle
 import warnings
@@ -49,13 +59,17 @@ from modeling import (
     BASE_PARAMS,
     MODELS_DIR,
     ROOT,
+    TASKS,
     apply_calibration,
     calibration_table,
     classification_metrics,
     fit_platt,
     load_feature_table,
+    make_model,
+    regression_metrics,
     split_holdout,
 )
+from score_dist import fit_distribution, ladder_eval, prob_over
 
 warnings.filterwarnings("ignore")
 
@@ -63,6 +77,9 @@ REPORTS_DIR = ROOT / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 CALIBRATION_MIN_GAIN = 0.001  # holdout log-loss iyileşmesi bundan küçükse kalibrasyon kapalı
+WIN_SOURCE_MIN_GAIN = 0.001   # fark modeli kazananı ancak bu kadar daha iyi log-loss ile devralır
+RECENT_FOLDS = 3              # hata dağılımı son 3 OOF fold'undan (güncel lig, daha çok eğitim verisi)
+DIST_PATH = MODELS_DIR / "distribution.json"
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +269,10 @@ def generate_html_report(
 
 
 # ---------------------------------------------------------------------------
-def main():
+def evaluate_win() -> dict | None:
+    """Win model. Returns its holdout probabilities (for win_source) or None."""
     print(f"\n{'='*60}")
-    print("Model Değerlendirme — Walk-Forward OOF + Holdout")
+    print("Model Değerlendirme — Kazanan (win) — Walk-Forward OOF + Holdout")
     print(f"{'='*60}\n")
 
     df, feat_cols, meta = load_artifacts()
@@ -376,11 +394,227 @@ def main():
         REPORTS_DIR / "evaluation_report.html"
     )
 
+    if not holdout_metrics:
+        return None
+    return {"game_ids": holdout["game_id"].astype(str).values, "y_true": y_true, "y_prob": y_prob}
+
+
+# ---------------------------------------------------------------------------
+# Margin / total models
+# ---------------------------------------------------------------------------
+def baseline_prediction(task: str, dev: pd.DataFrame, holdout: pd.DataFrame) -> tuple[np.ndarray, str]:
+    """
+    Simple reference the model has to beat:
+      margin: home margin from the Elo difference (straight line fit on dev)
+      total:  average game total of both teams' last 10 games
+    """
+    target = TASKS[task]["target"]
+    if task == "margin" and "elo_diff" in dev.columns:
+        ok = dev["elo_diff"].notna()
+        slope, intercept = np.polyfit(dev.loc[ok, "elo_diff"], dev.loc[ok, target], 1)
+        pred = intercept + slope * holdout["elo_diff"].fillna(0).values
+        return pred, f"Elo farkından doğrusal: {intercept:+.2f} + {slope:.4f} × elo_diff"
+    cols = ["home_pace_L10", "away_pace_L10"]
+    if task == "total" and all(c in dev.columns for c in cols):
+        fallback = float(dev[target].tail(1000).mean())
+        pred = holdout[cols].mean(axis=1).fillna(fallback).values
+        return pred, "İki takımın son 10 maç toplam ortalaması"
+    return np.full(len(holdout), float(dev[target].mean())), "Arama verisi ortalaması"
+
+
+def _print_reg(name: str, m: dict) -> None:
+    print(f"    {name:<16}: MAE {m['mae']:6.2f}  RMSE {m['rmse']:6.2f}  sapma {m['bias']:+6.2f}  "
+          f"±5 içinde %{m['within_5'] * 100:4.1f}  ±10 içinde %{m['within_10'] * 100:4.1f}")
+
+
+def _save_distribution(task: str, params: dict) -> None:
+    dists = json.loads(DIST_PATH.read_text(encoding="utf-8")) if DIST_PATH.exists() else {}
+    dists[task] = params
+    DIST_PATH.write_text(json.dumps(dists, indent=2), encoding="utf-8")
+
+
+def evaluate_regression(task: str) -> dict | None:
+    """Margin or total model. Returns its holdout predictions or None."""
+    spec = TASKS[task]
     print(f"\n{'='*60}")
-    print("Değerlendirme tamamlandı.")
+    print(f"Model Değerlendirme — {spec['label']} ({task}) — Walk-Forward OOF + Holdout")
+    print(f"{'='*60}\n")
+
+    meta_path = MODELS_DIR / spec["meta_file"]
+    if not meta_path.exists():
+        print(f"  [ATLANDI] {meta_path.name} yok. Önce: python src/03_train_model.py --task {task}")
+        return None
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    df, _ = load_feature_table()
+    with open(MODELS_DIR / "feature_columns.pkl", "rb") as f:
+        feat_cols = [c for c in pickle.load(f) if c in df.columns]
+    target = spec["target"]
+    df = df[df[target].notna()].reset_index(drop=True)
+    holdout_season = meta.get("holdout_season")
+    dev, holdout = split_holdout(df, holdout_season)
+    params = meta["best_params"]
+
+    # ---- 1. Walk-forward OOF ----
+    print("[1/3] Walk-forward değerlendirme (holdout öncesi sezonlar)...")
+    tscv = TimeSeriesSplit(n_splits=5, gap=0)
+    X_dev, y_dev = dev[feat_cols], dev[target].values.astype(float)
+    oof = np.full(len(dev), np.nan)
+    fold_of = np.full(len(dev), -1)
+    folds = []
+    for fold, (tr, va) in enumerate(tscv.split(X_dev)):
+        model = make_model(task, params)
+        model.fit(X_dev.iloc[tr], y_dev[tr], verbose=False)
+        pred = model.predict(X_dev.iloc[va])
+        oof[va], fold_of[va] = pred, fold
+        fm = regression_metrics(y_dev[va], pred)
+        folds.append({"fold": fold + 1, "n_train": len(tr), "n_val": len(va), **fm})
+        print(f"  Fold {fold + 1}: MAE={fm['mae']:.2f}  RMSE={fm['rmse']:.2f}  sapma={fm['bias']:+.2f}")
+
+    valid = ~np.isnan(oof)
+    oof_m = regression_metrics(y_dev[valid], oof[valid])
+    _print_reg("OOF toplam", oof_m)
+
+    print("\n  Sezon bazında sapma (OOF; + = fazla tahmin):")
+    seasons = dev["season_id"].values
+    for sid in sorted(set(seasons[valid])):
+        m = valid & (seasons == sid)
+        print(f"    Sezon {sid}: sapma {np.mean(oof[m] - y_dev[m]):+5.2f}  MAE {np.mean(np.abs(oof[m] - y_dev[m])):5.2f}  ({m.sum()} maç)")
+
+    # ---- 2. Hata dağılımı (son fold'lar) ----
+    print(f"\n[2/3] Hata dağılımı (son {RECENT_FOLDS} fold'un OOF hataları)...")
+    recent = fold_of >= 5 - RECENT_FOLDS
+    dist = fit_distribution(task, y_dev[recent] - oof[recent], oof[recent])
+    diag = dist["diagnostics"]
+    print(f"  {diag['n']} maç | RMS hata {diag['rms']:.2f} | sapma {diag['bias']:+.2f}")
+    print("  Tahmin büyüklüğüne göre hata (" + ("|tahmin|" if task == "margin" else "tahmin") + "):")
+    for b in diag["bins"]:
+        print(f"    ~{b['x_mean']:6.1f}: RMS {b['rms']:.2f}  ({b['n']} maç)")
+    if dist["sigma"]["kind"] == "linear":
+        s = dist["sigma"]
+        print(f"  → Sapma tahmine bağlı (eğilim uçtan uca ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f}): "
+              f"sigma = {s['a']:.2f} {s['b']:+.4f} × x  [{s['min']:.2f}, {s['max']:.2f}]")
+    else:
+        print(f"  → Sabit sigma {dist['sigma']['value']:.2f} "
+              f"(eğilim uçtan uca ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f})")
+
+    # ---- 3. Holdout ----
+    result = None
+    holdout_out = None
+    if len(holdout):
+        print(f"\n[3/3] Holdout: sezon {holdout_season} ({len(holdout)} maç)...")
+        model = make_model(task, params)
+        model.fit(X_dev, y_dev, verbose=False)
+        y_h = holdout[target].values.astype(float)
+        pred_h = model.predict(holdout[feat_cols])
+        hold_m = regression_metrics(y_h, pred_h)
+        base_pred, base_desc = baseline_prediction(task, dev, holdout)
+        base_m = regression_metrics(y_h, base_pred)
+        _print_reg("Model", hold_m)
+        _print_reg("Taban", base_m)
+        print(f"    (Taban: {base_desc})")
+
+        shapes = {}
+        for shape in ("normal", "kde"):
+            shapes[shape] = ladder_eval({**dist, "shape": shape}, y_h, pred_h)
+        best = min(shapes, key=lambda s: shapes[s]["brier"])
+        dist["shape"] = best
+        print("\n  Barem kalibrasyonu (tahminin ±8 sayısındaki 9 barem, her maç):")
+        for shape, ev in shapes.items():
+            mark = "  ← seçildi" if shape == best else ""
+            print(f"    {shape:<6}: Brier {ev['brier']:.4f}  ECE {ev['ece']:.4f}{mark}")
+        ev = shapes[best]
+        print("    Barem farkı → tahmini üst olasılığı → gerçekleşen üst oranı:")
+        for r in ev["by_offset"]:
+            print(f"      {r['offset']:+3d}: %{r['mean_pred'] * 100:5.1f} → %{r['frac_over'] * 100:5.1f}")
+
+        result = {
+            "headline": "holdout",
+            "holdout": hold_m,
+            "baseline": {**base_m, "description": base_desc},
+            "ladder": {"chosen": best, **{s: shapes[s] for s in shapes}},
+        }
+        holdout_out = {"game_ids": holdout["game_id"].astype(str).values, "pred": pred_h, "dist": dist}
+    else:
+        print("\n[3/3] Holdout yok (03 --no-holdout) — şekil normal kabul edildi.")
+
+    metrics_out = {
+        "task":            task,
+        "evaluated_at":    pd.Timestamp.now().isoformat(timespec="seconds"),
+        "holdout_season":  holdout_season if len(holdout) else None,
+        "n_holdout_games": int(len(holdout)),
+        "n_oof_games":     int(valid.sum()),
+        "oof":             oof_m,
+        "folds":           folds,
+        **(result or {"headline": "oof"}),
+        "distribution":    {k: v for k, v in dist.items() if k not in ("z",)},
+    }
+    metrics_path = MODELS_DIR / spec["metrics_file"]
+    metrics_path.write_text(json.dumps(metrics_out, indent=2), encoding="utf-8")
+    _save_distribution(task, dist)
+    print(f"\n  → Metrikler: {metrics_path}")
+    print(f"  → Dağılım  : {DIST_PATH} ({task})")
+    return holdout_out
+
+
+# ---------------------------------------------------------------------------
+# Which model supplies the home win probability
+# ---------------------------------------------------------------------------
+def compare_win_sources(win: dict, margin: dict) -> None:
+    """
+    P(home wins) from the classifier vs P(margin > 0) from the margin model,
+    on the same holdout games. The margin model takes over only with a clearly
+    lower log-loss; the result is stored in metrics.json (win_source).
+    """
+    print(f"\n{'='*60}")
+    print("Kazanan olasılığı: sınıflandırıcı mı, fark modeli mi?")
+    print(f"{'='*60}")
+    p_margin = dict(zip(margin["game_ids"], prob_over(margin["dist"], margin["pred"], 0.0)))
+    keep = np.array([g in p_margin for g in win["game_ids"]])
+    y = np.asarray(win["y_true"])[keep]
+    p_clf = np.asarray(win["y_prob"])[keep]
+    p_mar = np.array([p_margin[g] for g in np.asarray(win["game_ids"])[keep]])
+
+    clf = classification_metrics(y, p_clf)
+    mar = classification_metrics(y, np.clip(p_mar, 1e-6, 1 - 1e-6))
+    for name, m in (("Sınıflandırıcı", clf), ("Fark modeli", mar)):
+        print(f"  {name:<15}: log-loss {m['logloss']:.4f}  doğruluk %{m['accuracy'] * 100:.1f}  "
+              f"AUC {m['auc']:.3f}  Brier {m['brier']:.4f}")
+    source = "margin" if mar["logloss"] <= clf["logloss"] - WIN_SOURCE_MIN_GAIN else "classifier"
+    print(f"  → Uygulamada kullanılacak: {'fark modeli' if source == 'margin' else 'sınıflandırıcı'} "
+          f"(eşik {WIN_SOURCE_MIN_GAIN})")
+
+    path = MODELS_DIR / "metrics.json"
+    metrics = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    metrics["win_source"] = source
+    metrics["win_source_compare"] = {"n_games": int(keep.sum()), "classifier": clf, "margin": mar}
+    path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+def main(tasks: list[str]) -> None:
+    results = {}
+    for task in tasks:
+        results[task] = evaluate_win() if task == "win" else evaluate_regression(task)
+
+    if results.get("win") and results.get("margin"):
+        compare_win_sources(results["win"], results["margin"])
+    elif "margin" in tasks or "win" in tasks:
+        print("\n  (Kazanan kaynağı karşılaştırması için win ve margin aynı çalıştırmada değerlendirilmeli.)")
+
+    print(f"\n{'='*60}")
+    print(f"Değerlendirme tamamlandı ({', '.join(tasks)}).")
     print("Sonraki adım: python src/05_predict_today.py")
     print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.stdout.reconfigure(errors="replace")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--task", choices=[*TASKS, "all"], default="all",
+        help="Değerlendirilecek model: win, margin, total ya da all (varsayılan)",
+    )
+    args = parser.parse_args()
+    main(list(TASKS) if args.task == "all" else [args.task])

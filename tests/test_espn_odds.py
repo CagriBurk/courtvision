@@ -186,6 +186,27 @@ def test_pick_entry_skips_projections_and_opening_lines():
     assert provider_rank("DraftKings - Live Odds") is None
 
 
+def test_out_of_range_lines_are_missing():
+    o = parse_odds_entry({"spread": 17.0, "overUnder": 2001.0})     # 5Dimes, Jan 2016
+    assert o["spread_home"] == 17.0 and o["total"] is None
+    assert parse_odds_entry({"spread": -1.0, "overUnder": -1.0})["total"] is None
+    assert parse_odds_entry({"spread": 45.0, "overUnder": -1.0}) is None
+
+
+def test_line_straying_from_other_books_is_skipped():
+    # Opening night 2019: DraftKings kept an in-game total (263) and spread
+    dk = line("DraftKings", -6.5) | {"overUnder": 263.0}
+    others = [line("Caesars", -6.5) | {"overUnder": 230.5}, line("Westgate", -7.0) | {"overUnder": 231.0},
+              line("MGM", -6.5) | {"overUnder": 230.0}]
+    assert pick_entry([dk] + others)["provider"]["name"] == "Caesars"
+    stray_spread = line("DraftKings", -12.5)
+    assert pick_entry([stray_spread] + others)["provider"]["name"] == "Caesars"
+    # Within tolerance, or too few books to judge: the ranking decides
+    near = line("DraftKings", -8.0) | {"overUnder": 233.5}
+    assert pick_entry([near] + others)["provider"]["name"] == "DraftKings"
+    assert pick_entry([dk, others[0]])["provider"]["name"] == "DraftKings"
+
+
 def test_parse_scoreboard():
     data = {"events": [
         event("1", "MIN", "UTAH", scoreboard_entry(-11.5, 223.5, "-700", "+500")),

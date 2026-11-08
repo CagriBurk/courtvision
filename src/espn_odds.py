@@ -37,6 +37,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT       = Path(__file__).parent.parent
@@ -90,6 +91,13 @@ PROVIDER_PREFERENCE = [
 ]
 # Projection sites and opening lines are not closing market prices.
 EXCLUDED_PROVIDERS = {"numberfire", "teamrankings", "accuscore", "fantasy911.com", "opening"}
+
+# Sanity limits and the cross-book check (pick_entry)
+MAX_ABS_SPREAD      = 30.0
+TOTAL_RANGE         = (150.0, 300.0)
+MIN_BOOKS_FOR_CHECK = 3
+SPREAD_TOLERANCE    = 3.0    # points from the books' median spread
+TOTAL_TOLERANCE     = 6.0    # points from the books' median total
 
 COLUMNS = [
     "game_id", "game_date", "home_team_abbr", "away_team_abbr", "espn_event_id",
@@ -195,6 +203,11 @@ def parse_odds_entry(entry: dict | None) -> dict | None:
     total = _num(_get(entry, "total", "over", "close", "line"))
     if total is None:
         total = _num(entry.get("overUnder"))
+    # Data-entry errors exist (a total of 2001.0 or -1.0): out-of-range values are missing
+    if spread is not None and abs(spread) > MAX_ABS_SPREAD:
+        spread = None
+    if total is not None and not TOTAL_RANGE[0] <= total <= TOTAL_RANGE[1]:
+        total = None
     if spread is None and total is None:
         return None
 
@@ -247,13 +260,39 @@ def provider_rank(name: str) -> int | None:
 
 
 def pick_entry(entries: list | None) -> dict | None:
-    """Best-ranked source (provider_rank) that offers a line."""
+    """
+    Best-ranked source (provider_rank) that offers a line and agrees with the
+    other books. Older games only keep each book's last ("current") line,
+    which for some games was captured in-game (e.g. a total of 263 for a game
+    whose pre-game total was ~230); with three or more books, a line that
+    strays from their median is skipped for the next best book.
+    """
     ranked = []
     for i, e in enumerate(entries or []):
         rank = provider_rank(_get(e, "provider", "name"))
-        if rank is not None and parse_odds_entry(e):
-            ranked.append((rank, i, e))
-    return min(ranked, key=lambda t: t[:2])[2] if ranked else None
+        parsed = parse_odds_entry(e) if rank is not None else None
+        if parsed:
+            ranked.append((rank, i, e, parsed))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda t: t[:2])
+
+    def median(key):
+        vals = [p[key] for *_, p in ranked if p[key] is not None]
+        return float(np.median(vals)) if len(vals) >= MIN_BOOKS_FOR_CHECK else None
+
+    med_spread, med_total = median("spread_home"), median("total")
+
+    def agrees(p):
+        return ((med_spread is None or p["spread_home"] is None
+                 or abs(p["spread_home"] - med_spread) <= SPREAD_TOLERANCE)
+                and (med_total is None or p["total"] is None
+                     or abs(p["total"] - med_total) <= TOTAL_TOLERANCE))
+
+    for *_, e, p in ranked:
+        if agrees(p):
+            return e
+    return ranked[0][2]
 
 
 def parse_scoreboard(data: dict) -> list[dict]:

@@ -119,17 +119,17 @@ def settle_coupons(pred_log: pd.DataFrame, path: Path | None = None) -> int:
     return settled
 
 
-def set_played_odds(coupon_id: str, odds: float | None) -> dict:
+def set_played_odds(coupon_id: str, odds: float | None, path: Path | None = None) -> dict:
     """Records (or clears) the total odds the user actually played; locks the coupon."""
     if odds is not None and not odds > 1:
         raise ValueError("oran 1'den büyük olmalı")
-    log = load_coupons()
+    log = load_coupons(path)
     for c in log:
         if c["id"] == coupon_id:
             c["played_odds"] = None if odds is None else round(float(odds), 2)
             if odds is not None:
                 c["locked"] = True
-            _save(log)
+            _save(log, path)
             return c
     raise KeyError(coupon_id)
 

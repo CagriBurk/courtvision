@@ -19,6 +19,7 @@ import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # src/ if inside src, add parent to sys.path'e ekle
 ROOT = Path(__file__).parent.parent
@@ -878,6 +879,77 @@ async def fill_results_endpoint():
     n_offline = int(filled_offline["correct"].notna().sum()) if filled_offline is not None and not filled_offline.empty else 0
     n_live    = int(filled_live["correct"].notna().sum())    if filled_live    is not None and not filled_live.empty    else 0
     return {"status": "ok", "completedOffline": n_offline, "completedLive": n_live}
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: Kuponlar ve karne (Faz 6)
+# ---------------------------------------------------------------------------
+def _camel(obj):
+    """snake_case keys → camelCase, recursively (coupon / report payloads)."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            head, *rest = str(k).split("_")
+            out[head + "".join(w[:1].upper() + w[1:] for w in rest)] = _camel(v)
+        return out
+    if isinstance(obj, list):
+        return [_camel(v) for v in obj]
+    return obj
+
+
+def _coupon_log_path() -> Path:
+    return PRED_DIR / "coupons_log.json"
+
+
+@app.get("/api/coupons/today")
+async def coupons_today():
+    """Today's coupons (05 → data/live/coupons.json) with their latest state from the log."""
+    from coupon_tracker import load_coupons
+
+    path = LIVE_DIR / "coupons.json"
+    if not path.exists():
+        return {"date": None, "coupons": [], "games": [], "nLegs": 0,
+                "note": "Henüz kupon üretilmedi. Tahminler güncellenince oluşur."}
+    view = json.loads(path.read_text(encoding="utf-8"))
+    latest = {c["id"]: c for c in load_coupons(_coupon_log_path())}
+    view["coupons"] = [latest.get(c.get("id"), c) for c in view.get("coupons", [])]
+    return _camel(view)
+
+
+class PlayedOdds(BaseModel):
+    odds: float | None = None
+
+
+@app.post("/api/coupons/{coupon_id}/played-odds")
+async def coupon_played_odds(coupon_id: str, body: PlayedOdds):
+    """Optional: the total odds actually played (profit in the report card). null clears it."""
+    from coupon_tracker import set_played_odds
+    try:
+        return _camel(set_played_odds(coupon_id, body.odds, _coupon_log_path()))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Kupon bulunamadı")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/report-card")
+async def report_card(days: int = 30):
+    """Karne: side / handicap / total calibration, coupon tiers, recent coupons."""
+    from coupon_tracker import load_coupons
+    from report_card import build_report_card
+
+    pred_path = PRED_DIR / "predictions_log.parquet"
+    log = pd.read_parquet(pred_path) if pred_path.exists() else None
+    coupons = load_coupons(_coupon_log_path())
+    card = build_report_card(log, coupons)
+    tier_order = {"guvenli": 0, "dengeli": 1, "riskli": 2}
+    cutoff = str((pd.Timestamp(nba_today()) - pd.Timedelta(days=days)).date())
+    card["recent_coupons"] = sorted(
+        (c for c in coupons if c["date"] >= cutoff),
+        key=lambda c: (c["date"], -tier_order.get(c["tier"], 9)),
+        reverse=True,  # en yeni gün önce; gün içinde güvenli → riskli
+    )
+    return _camel(card)
 
 
 # ---------------------------------------------------------------------------

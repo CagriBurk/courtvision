@@ -334,3 +334,57 @@ def test_history_and_metrics_include_lines(tmp_path, monkeypatch):
     m = client.get("/api/model/metrics").json()
     assert m["lines"]["margin"]["mae"] == 11.07 and m["lines"]["margin"]["bands"][0]["obs"] == 0.065
     assert "total" not in m["lines"] and m["winSource"] == "classifier"
+
+
+# ---------------------------------------------------------------------------
+# Coupons and report card (Faz 6)
+# ---------------------------------------------------------------------------
+def test_coupon_endpoints_and_report_card(tmp_path, monkeypatch):
+    import api_server
+    import coupon_tracker
+    import prediction_tracker
+    from coupons import build_coupons
+    from season import nba_today
+    from test_coupons import DIST, pred
+
+    monkeypatch.setattr(api_server, "PRED_DIR", tmp_path)
+    monkeypatch.setattr(api_server, "LIVE_DIR", tmp_path / "live")
+    monkeypatch.setattr(coupon_tracker, "COUPON_LOG", tmp_path / "coupons_log.json")
+    monkeypatch.setattr(coupon_tracker, "LIVE_DIR", tmp_path / "live")
+    monkeypatch.setattr(prediction_tracker, "PRED_DIR", tmp_path)
+    monkeypatch.setattr(prediction_tracker, "PRED_LOG", tmp_path / "predictions_log.parquet")
+
+    assert client.get("/api/coupons/today").json()["coupons"] == []
+
+    day = str(nba_today())
+    preds = [pred(f"G{i}", m) for i, m in enumerate([9.0, -8.0, 7.0])]
+    built = build_coupons(preds, DIST)
+    today = coupon_tracker.save_coupons(day, built, set())
+    coupon_tracker.write_live_view(day, built, today)
+
+    data = client.get("/api/coupons/today").json()
+    safe = data["coupons"][0]
+    assert safe["id"] == f"{day}:guvenli" and safe["minOdds"] >= safe["fairOdds"]
+    assert {"label", "p", "fairOdds", "minOdds", "gameId"} <= set(safe["legs"][0])
+    assert data["nLegs"] == 3 and data["games"][0]["reasons"]
+
+    # Record the odds played: locks the coupon and shows up in today's view
+    r = client.post(f"/api/coupons/{day}:guvenli/played-odds", json={"odds": 3.25})
+    assert r.status_code == 200 and r.json()["locked"] is True
+    assert client.get("/api/coupons/today").json()["coupons"][0]["playedOdds"] == 3.25
+    assert client.post(f"/api/coupons/{day}:guvenli/played-odds", json={"odds": 0.5}).status_code == 400
+    assert client.post("/api/coupons/yok:guvenli/played-odds", json={"odds": 2}).status_code == 404
+
+    # Games finish → coupons settle → report card counts them
+    prediction_tracker.save_predictions(preds)
+    prediction_tracker.fill_results(pd.DataFrame({
+        "game_id": ["G0", "G1", "G2"], "target": [1, 0, 1],
+        "pts_home": [130, 90, 120], "pts_away": [100, 125, 100],
+    }))
+    card = client.get("/api/report-card").json()
+    tiers = {t["tier"]: t for t in card["coupons"]["tiers"]}
+    assert tiers["guvenli"]["n"] == 1 and tiers["guvenli"]["won"] == 1
+    assert tiers["guvenli"]["profit"] == pytest.approx(2.25)
+    assert card["side"]["n"] == 3 and card["handicap"]["calibration"]["n"] == 27
+    assert [c["tier"] for c in card["recentCoupons"]] == ["guvenli", "dengeli", "riskli"]
+    assert card["recentCoupons"][0]["legs"][0]["won"] is True

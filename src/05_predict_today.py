@@ -32,6 +32,7 @@ import pandas as pd
 
 from espn_odds import update_today_lines
 from feature_engineering import build_feature_matrix
+from market_blend import build_lines, load_market_distribution
 from modeling import TASKS, apply_calibration, explain_prediction
 from nba_data_client import (
     NBA_API_AVAILABLE,
@@ -41,7 +42,6 @@ from nba_data_client import (
 )
 from player_stats import get_injuries, match_player_ids
 from prediction_tracker import save_predictions, fill_results
-from score_dist import game_lines
 from season import current_season, nba_today, season_id, season_start_year
 
 # ---------------------------------------------------------------------------
@@ -222,6 +222,24 @@ def _lines_summary(g: dict, lines: dict) -> str:
     return " | ".join(parts)
 
 
+def _margin_label(g: dict, margin: float | None) -> str:
+    """Expected home margin → 'DAL -7.5' (the favourite and its handicap)."""
+    if margin is None:
+        return "-"
+    fav = g["home_team_abbr"] if margin >= 0 else g["away_team_abbr"]
+    return f"{fav} -{abs(margin):.1f}"
+
+
+def _market_summary(g: dict, info: dict) -> str:
+    """'Piyasa DAL -7.5 / 222.5 · model DAL -12.5' style one-liner."""
+    parts = [f"Piyasa {_margin_label(g, info['market_margin'])}"]
+    if info.get("market_total") is not None:
+        parts[0] += f" / {info['market_total']:.1f}"
+    if info.get("model_fair_margin") is not None:
+        parts.append(f"model {_margin_label(g, info['model_fair_margin'])}")
+    return " · ".join(parts)
+
+
 def load_line_models() -> tuple[dict, dict, str]:
     """
     Margin / total regressors and their error distributions (from 03 and 04),
@@ -250,9 +268,11 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
                   feature_columns: list, target_date: date,
                   calibration: dict | None = None,
                   line_models: dict | None = None, dists: dict | None = None,
-                  win_source: str = "classifier") -> list[dict]:
+                  win_source: str = "classifier", market: dict | None = None,
+                  market_dist: dict | None = None) -> list[dict]:
     predictions = []
     line_models = line_models or {}
+    market = market or {}
 
     for g in games:
         gid = str(g["game_id"])
@@ -267,13 +287,14 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
         # Modelin kendi gerekçesi (SHAP katkıları, okunur gruplara toplanmış)
         model_factors = explain_prediction(model, X_live, calibration)
 
-        # Handikap / toplam: fark ve toplam tahmini → barem olasılıkları
+        # Handikap / toplam: piyasa çizgisi varsa onun etrafında (market_blend),
+        # yoksa modelin fark / toplam tahmini → barem olasılıkları
         reg_pred = {t: float(m.predict(X_live)[0]) for t, m in line_models.items()}
-        lines = game_lines(dists or {}, reg_pred.get("margin"), reg_pred.get("total")) if reg_pred else None
+        lines, model_lines, market_info = build_lines(dists or {}, reg_pred, market.get(gid), market_dist)
         source = "classifier"
-        prob_clf = prob_home  # kupon seçimi iki modelin uyumuna bakar
-        if win_source == "margin" and lines and "margin" in lines:
-            prob_home = lines["margin"]["p_home_win"]
+        prob_clf = prob_home
+        if win_source == "margin" and model_lines and "margin" in model_lines:
+            prob_home = model_lines["margin"]["p_home_win"]
             source = "margin"
         prob_away = 1.0 - prob_home
         winner    = "HOME" if prob_home > 0.5 else "AWAY"
@@ -296,6 +317,10 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "pred_margin":      reg_pred.get("margin"),
             "pred_total":       reg_pred.get("total"),
             "lines":            json.dumps(lines) if lines else None,
+            "model_lines":      json.dumps(model_lines) if model_lines else None,
+            # Piyasa (ESPN / DraftKings): çizgi, marjsız ev olasılığı, model ile kıyas
+            "market":           json.dumps(market_info) if market_info else None,
+            "prob_home_market": market_info["p_home"] if market_info else None,
             # Form özeti
             "home_form_L5":     _num(row.get("home_won_L5")),
             "home_form_L10":    _num(row.get("home_won_L10")),
@@ -327,7 +352,8 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "away_n_missing_rotation":  _int(row.get("away_n_missing_rotation")),
         }
         print(f"  {g['home_team_abbr']} %{prob_home * 100:.1f} | {g['away_team_abbr']} %{prob_away * 100:.1f} [{conf}]"
-              + (f"  | {_lines_summary(g, lines)}" if lines else ""))
+              + (f"  | {_lines_summary(g, lines)}" if lines else "")
+              + (f"  | {_market_summary(g, market_info)}" if market_info else ""))
         predictions.append(result)
 
     return predictions
@@ -534,11 +560,18 @@ def main(target_date: date | None = None):
     schedule_path.write_text(json.dumps(games, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Piyasa çizgileri (ESPN / DraftKings): tek istek, yalnız başlamamış maçlar güncellenir
+    market = {}
     try:
         market = update_today_lines(target_date, games)
         print(f"Piyasa çizgisi: {len(market)}/{len(games)} maç")
     except Exception as e:
         print(f"  [UYARI] Piyasa çizgileri alınamadı: {e}")
+    market_dist = load_market_distribution()
+    if market_dist is None:
+        print("  Piyasa dağılımı yok (09_market_eval.py çalıştırılmalı): çizgiler modelden")
+    else:
+        print(f"  Çizgiler piyasa merkezli (model payı: fark w={market_dist['blend']['margin']['w']:.2f}, "
+              f"toplam w={market_dist['blend']['total']['w']:.2f})")
 
     # Feature'lar (eğitimle aynı pipeline) + tahminler.
     # Başlamış/bitmiş maçlar da tahmin edilir: feature'lar sadece önceki
@@ -562,7 +595,7 @@ def main(target_date: date | None = None):
 
     print("\nTahminler hesaplanıyor...")
     predictions = predict_games(games, live_feats, model, feature_columns, target_date, calibration,
-                                line_models, dists, win_source)
+                                line_models, dists, win_source, market, market_dist)
     for p in predictions:
         p["home_form_seq"] = recent_form(master, str(p["home_team_id"]), target_date)
         p["away_form_seq"] = recent_form(master, str(p["away_team_id"]), target_date)

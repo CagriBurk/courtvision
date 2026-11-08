@@ -332,3 +332,19 @@ def test_predict_games_adds_handicap_and_total():
     assert proj["home"] + proj["away"] == pytest.approx(p["pred_total"], abs=0.11)
     # The report helper reads the same JSON
     assert "Toplam" in predict_today._lines_summary(p, lines)
+    assert p["market"] is None and p["prob_home_market"] is None
+
+    # With a market line: the app's lines are centred on it, the model's kept aside
+    market = {g["game_id"]: {"spread_home": -7.5, "market_margin": 7.5, "total": 222.5,
+                             "p_home_novig": 0.74, "provider": "DraftKings"}}
+    market_dist = {**dists, "blend": {"margin": {"w": 0.0}, "total": {"w": 0.0}}}
+    pm = predict_today.predict_games(games, live, clf, feat_cols, day, None, reg, dists, "margin",
+                                     market, market_dist)[0]
+    m_lines, model_lines, info = (_json.loads(pm[k]) for k in ("lines", "model_lines", "market"))
+    assert m_lines["margin"]["pred"] == pytest.approx(7.5)
+    assert m_lines["total"]["pred"] == pytest.approx(222.5)
+    assert model_lines == lines                       # the model's own view is unchanged
+    assert pm["prob_home"] == pytest.approx(lines["margin"]["p_home_win"])   # still the model's
+    assert pm["prob_home_market"] == 0.74
+    assert info["source"] == {"margin": "market", "total": "market"}
+    assert "Piyasa" in predict_today._market_summary(pm, info)

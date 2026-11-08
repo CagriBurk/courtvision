@@ -254,6 +254,24 @@ def test_scores_are_tracked_and_reported(temp_log_dir):
     assert all(b["frac_over"] == 0 for b in rep["total"]["ladder_calibration"])
 
 
+def test_market_and_model_are_logged_separately(temp_log_dir):
+    import json
+    market = {"market_margin": 7.5, "market_total": 222.5, "p_home": 0.73, "provider": "DraftKings"}
+    prediction_tracker.save_predictions([
+        {"game_id": "1", "prob_home": 0.8, "pred_margin": 10.0, "pred_total": 226.0,
+         "lines": _lines(7.5, 222.5), "model_lines": _lines(12.5, 225.5), "market": json.dumps(market)},
+        {"game_id": "2", "prob_home": 0.5, "pred_margin": 1.0, "lines": _lines(1.5, 220.5)},  # no market
+    ])
+    saved = pd.read_parquet(temp_log_dir).set_index("game_id")
+    assert saved.loc["1", "fair_margin_line"] == 7.5            # what the app priced with
+    assert saved.loc["1", "market_margin"] == 7.5 and saved.loc["1", "market_total"] == 222.5
+    assert saved.loc["1", "prob_home_market"] == 0.73
+    assert saved.loc["1", "market_provider"] == "DraftKings"
+    assert pd.isna(saved.loc["2", "market_margin"])
+    # Without separate model lines the app's lines are the model's
+    assert saved.loc["2", "model_lines_json"] is None
+
+
 def test_old_log_without_score_columns_is_backfilled(temp_log_dir):
     """Logs written before Faz 5 lack the score columns; filling adds them,
     including for games whose winner was already settled."""

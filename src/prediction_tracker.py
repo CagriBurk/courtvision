@@ -63,6 +63,8 @@ def save_predictions(predictions: list[dict]) -> pd.DataFrame:
 
         prob_home = float(p.get("prob_home", 0.5))
         lines = json.loads(p["lines"]) if p.get("lines") else {}
+        model_lines = json.loads(p["model_lines"]) if p.get("model_lines") else lines
+        market = json.loads(p["market"]) if p.get("market") else {}
 
         rows.append(
             {
@@ -84,6 +86,14 @@ def save_predictions(predictions: list[dict]) -> pd.DataFrame:
                 "fair_margin_line": _opt_float(lines.get("margin", {}).get("fair_line")),
                 "fair_total_line": _opt_float(lines.get("total", {}).get("fair_line")),
                 "lines_json": p.get("lines"),
+                # Model ve piyasa ayrı ayrı: karne canlıda ikisini kıyaslar
+                "model_margin_center": _opt_float(model_lines.get("margin", {}).get("pred")),
+                "model_total_center": _opt_float(model_lines.get("total", {}).get("pred")),
+                "model_lines_json": p.get("model_lines"),
+                "market_margin": _opt_float(market.get("market_margin")),
+                "market_total": _opt_float(market.get("market_total")),
+                "prob_home_market": _opt_float(market.get("p_home")),
+                "market_provider": market.get("provider"),
                 "actual_home_pts": np.nan,
                 "actual_away_pts": np.nan,
             }

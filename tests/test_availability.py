@@ -51,7 +51,9 @@ def feats_for(result, game_id, team_id="A"):
 
 
 def test_absent_star_counts_as_missing(league):
+    # STAR also misses game 11 (index 10): by game 12 his absence is known
     team_games, players = league
+    players = players[~((players["player_id"] == "STAR") & (players["game_id"] == "A10"))]
     result = compute_availability_features(team_games, players)
 
     last = feats_for(result, "A11")
@@ -61,6 +63,20 @@ def test_absent_star_counts_as_missing(league):
 
     # A normal game with everyone available
     assert feats_for(result, "A9")["missing_min_share"] == 0
+
+
+def test_new_absence_is_hindsight_and_not_counted(league):
+    # STAR played game 11 and sits game 12 (late scratch / questionable / rest):
+    # only the game's own box score shows it, so it is not a known absence
+    team_games, players = league
+    result = compute_availability_features(team_games, players)
+    assert feats_for(result, "A11")["missing_min_share"] == 0
+
+    # Same for the first game of a two-game absence
+    players = players[~((players["player_id"] == "STAR") & (players["game_id"] == "A10"))]
+    result = compute_availability_features(team_games, players)
+    assert feats_for(result, "A10")["missing_min_share"] == 0
+    assert feats_for(result, "A11")["missing_min_share"] == pytest.approx(30 / 240)
 
 
 def test_long_absence_does_not_dilute_expected_minutes(league):

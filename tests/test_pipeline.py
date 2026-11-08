@@ -185,16 +185,27 @@ def test_live_features_match_training_with_players():
     target_date = target_game["game_date"].date()
     gid = target_game["game_id"]
 
+    # The home team's best player sits this game and the one before: a known absence
+    home = target_game["team_id_home"]
+    home_rows = players[(players["team_id"] == home) & (players["game_date"] < target_game["game_date"])]
+    home_prev = home_rows.sort_values("game_date")["game_id"].iloc[-1]
+    players = players[~((players["player_id"] == f"{home}_0") & players["game_id"].isin([gid, home_prev]))]
+
     train_feats, _ = build_feature_matrix(master, player_games=players)
     feat_cols = [c for c in train_feats.columns if c not in META_COLS]
     assert "home_missing_min_share" in feat_cols
     expected = train_feats.set_index("game_id").loc[gid, feat_cols]
+    assert expected["home_missing_min_share"] > 0
 
-    # Injury report = roster players who did not play in that game
+    # Injury report = roster players already out: no minutes in that game nor
+    # in the team's previous game (the absences training treats as known)
     override = {}
     for team in (target_game["team_id_home"], target_game["team_id_away"]):
         roster = {f"{team}_{k}" for k in range(9)}
-        played = set(players[(players["game_id"] == gid) & (players["team_id"] == team)]["player_id"])
+        team_rows = players[players["team_id"] == team]
+        prev_gid = (team_rows[team_rows["game_date"] < target_game["game_date"]]
+                    .sort_values("game_date")["game_id"].iloc[-1])
+        played = set(team_rows[team_rows["game_id"].isin([gid, prev_gid])]["player_id"])
         override[(gid, team)] = roster - played
 
     games = [{

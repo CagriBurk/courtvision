@@ -557,7 +557,11 @@ def compute_availability_features(
               window reaches into last season's final weeks).
     Absent  = training: on the roster (their next appearance, at or after this
               date, is for this team — so traded or departed players don't
-              count) but no minutes in this game.
+              count), no minutes in this game AND none in the team's previous
+              game, i.e. an absence already known before tip-off. Counting
+              every player without minutes leaked hindsight (late scratches,
+              whether questionable players played) that the market and the
+              live injury report do not have.
               live: names from the injury report, given as
               absent_override[(game_id, team_id)] = {player_id, ...}; the
               roster is then "last appearance was for this team".
@@ -640,7 +644,13 @@ def compute_availability_features(
             member_last[j] = (k > 0) & (p_teams[np.maximum(k - 1, 0)] == team_id)
 
         member = member_next.copy()
-        absent = pool & member_next & (minutes == 0)
+        # Known before tip-off: no minutes in this game AND in the team's
+        # previous game (with a box score). A player who played last time and
+        # sits now (late scratch, questionable → out, rest) is only known in
+        # hindsight from this game's box score, so he does not count.
+        prev_out = np.zeros_like(minutes, dtype=bool)
+        prev_out[:, 1:] = (minutes[:, :-1] == 0) & has_box[:-1]
+        absent = pool & member_next & (minutes == 0) & prev_out
         for i, ids in live_cols.items():
             member[:, i] = member_last[:, i]
             absent[:, i] = pool[:, i] & member_last[:, i] & np.isin(players, list(ids))

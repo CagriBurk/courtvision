@@ -451,7 +451,7 @@ def _lines_response(raw: str | None, quality: dict | None = None) -> dict | None
     def ladder(rows):
         return [{"line": r["line"], "pOver": r["p_over"]} for r in rows]
 
-    out = {"projected": lines.get("projected")}
+    out = {"projected": lines.get("projected"), "scores": lines.get("scores")}
     m = lines.get("margin")
     out["spread"] = None if not m else {
         "pred":      m["pred"],

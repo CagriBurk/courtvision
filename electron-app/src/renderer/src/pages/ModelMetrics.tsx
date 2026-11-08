@@ -1,5 +1,6 @@
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts'
 import { formatDateTr, useModelMetrics } from '../hooks/useModelMetrics'
+import LineModelsSection from '../components/LineModelsSection'
 
 interface ModelMetricsProps {
   apiBase?: string
@@ -101,6 +102,9 @@ export default function ModelMetrics({ apiBase }: ModelMetricsProps) {
             </div>
           ))}
         </div>
+
+        {/* Handikap & toplam (Faz 5) */}
+        <LineModelsSection lines={data?.lines} holdoutSeason={data?.holdoutSeason} />
 
         {/* Fold performance */}
         <div>

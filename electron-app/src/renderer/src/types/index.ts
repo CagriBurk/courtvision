@@ -49,6 +49,50 @@ export interface Game {
   awayInjuries?: InjuredPlayer[]
   homeTopPlayers?: TopPlayer[]
   awayTopPlayers?: TopPlayer[]
+  lines?: GameLines | null // handikap / toplam (modeller yoksa null)
+}
+
+// Barem merdiveni basamağı. Handikapta line ev sahibi farkı üzerindedir:
+// pOver = P(ev farkı > line) → "Ev -line" kazanır; 1 - pOver → "Dep +line".
+export interface LadderRung {
+  line: number
+  pOver: number
+}
+
+export interface MarginBand {
+  side: 'home' | 'away'
+  lo: number
+  hi: number | null // null = üstü açık (26+)
+  p: number
+}
+
+export interface TeamScoreDist {
+  mean: number
+  sd: number
+  bins: { lo: number; hi: number; p: number }[]
+  best10: { lo: number; hi: number; p: number }
+}
+
+export interface GameLines {
+  projected: { home: number; away: number } | null
+  scores: { home: TeamScoreDist; away: TeamScoreDist } | null
+  spread: {
+    pred: number // beklenen ev farkı (+ = ev önde)
+    sigma: number
+    fairLine: number
+    pHomeWin: number
+    ladder: LadderRung[]
+    bands: MarginBand[]
+    lowSignal: boolean
+  } | null
+  total: {
+    pred: number
+    sigma: number
+    fairLine: number
+    ladder: LadderRung[]
+    lowSignal: boolean // model basit tabanı geçemiyor
+    baseline?: string | null
+  } | null
 }
 
 export type NavPage = 'dashboard' | 'history' | 'metrics' | 'settings'
@@ -63,6 +107,22 @@ export interface PredictionRecord {
   predictedWinner: string
   actualWinner: string | null
   correct: boolean | null
+  // Handikap / toplam (Faz 5 öncesi kayıtlarda null)
+  predMargin?: number | null
+  predTotal?: number | null
+  fairMarginLine?: number | null
+  fairTotalLine?: number | null
+  homeScore?: number | null
+  awayScore?: number | null
+}
+
+export interface LineStats {
+  n: number
+  mae: number
+  bias: number
+  within5: number
+  within10: number
+  ladderCalibration: { meanPred: number; fracOver: number; n: number }[]
 }
 
 export interface ModelHealth {

@@ -1,6 +1,61 @@
 import { CheckCircle, XCircle, Minus } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { PredictionRecord } from '../types'
+import { LineStats, PredictionRecord } from '../types'
+
+// Tahmin edilen ↔ gerçekleşen (fark ya da toplam); renk hatanın büyüklüğüne göre
+function PredVsActual({
+  label,
+  pred,
+  actual,
+  signedValues
+}: {
+  label: string
+  pred?: number | null
+  actual: number | null
+  signedValues?: boolean
+}): React.ReactElement | null {
+  if (pred === null || pred === undefined) return null
+  const fmt = (v: number): string => (signedValues && v > 0 ? `+${v.toFixed(0)}` : v.toFixed(0))
+  const err = actual === null ? null : Math.abs(pred - actual)
+  const tone =
+    err === null
+      ? 'text-slate-400'
+      : err <= 5
+        ? 'text-emerald-400'
+        : err <= 10
+          ? 'text-slate-300'
+          : 'text-red-400'
+  return (
+    <div
+      className="text-right w-20"
+      title={err !== null ? `Hata: ${err.toFixed(1)} sayı` : undefined}
+    >
+      <p className="text-slate-400 text-xs">{label}</p>
+      <p className={`text-sm font-semibold tabular-nums ${tone}`}>
+        {fmt(pred)}
+        <span className="text-slate-600"> → </span>
+        {actual === null ? '—' : fmt(actual)}
+      </p>
+    </div>
+  )
+}
+
+function LineStatCard({ title, s }: { title: string; s?: LineStats }): React.ReactElement {
+  return (
+    <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
+      <p className="text-slate-500 text-xs mb-1">{title}</p>
+      <p className="text-white font-bold text-2xl tabular-nums">
+        {s ? s.mae.toFixed(1) : '—'}
+        <span className="text-slate-500 text-sm font-normal"> sayı MAE</span>
+      </p>
+      <p className="text-slate-600 text-xs mt-0.5">
+        {s
+          ? `${s.n} maç · ±10 içinde %${s.within10.toFixed(0)} · sapma ${s.bias > 0 ? '+' : ''}${s.bias.toFixed(1)}`
+          : 'henüz sonuçlanan maç yok'}
+      </p>
+    </div>
+  )
+}
 
 interface HistoryProps {
   apiBase?: string
@@ -74,6 +129,8 @@ export default function History({ apiBase = 'http://127.0.0.1:8765' }: HistoryPr
   })
 
   const predictions: PredictionRecord[] = data?.predictions || []
+  const lineStats: Record<string, LineStats> = data?.stats?.lines || {}
+  const hasLines = predictions.some((r) => r.predMargin !== null && r.predMargin !== undefined)
   const apiError = isError
 
   const stats = computeStats(predictions)
@@ -143,6 +200,14 @@ export default function History({ apiBase = 'http://127.0.0.1:8765' }: HistoryPr
           </div>
         )}
 
+        {/* Handikap / toplam karnesi */}
+        {!isLoading && hasLines && (
+          <div className="grid grid-cols-2 gap-3">
+            <LineStatCard title="Fark (handikap) tahmini" s={lineStats.margin} />
+            <LineStatCard title="Toplam sayı tahmini" s={lineStats.total} />
+          </div>
+        )}
+
         {/* Prediction list by date */}
         <div className="space-y-5">
           {isLoading && (
@@ -205,6 +270,40 @@ export default function History({ apiBase = 'http://127.0.0.1:8765' }: HistoryPr
                           <span className="text-slate-600 text-xs">vs</span>
                           <span className="text-slate-300 text-sm">{r.awayTeam}</span>
                         </div>
+
+                        {/* Skor ve fark / toplam tahmini */}
+                        {(() => {
+                          const scored =
+                            r.homeScore !== null &&
+                            r.homeScore !== undefined &&
+                            r.awayScore !== null &&
+                            r.awayScore !== undefined
+                          const h = scored ? (r.homeScore as number) : 0
+                          const a = scored ? (r.awayScore as number) : 0
+                          return (
+                            <>
+                              {scored && (
+                                <div className="text-right w-16">
+                                  <p className="text-slate-400 text-xs">Skor</p>
+                                  <p className="text-white text-sm font-semibold tabular-nums">
+                                    {h}-{a}
+                                  </p>
+                                </div>
+                              )}
+                              <PredVsActual
+                                label="Fark"
+                                pred={r.predMargin}
+                                actual={scored ? h - a : null}
+                                signedValues
+                              />
+                              <PredVsActual
+                                label="Toplam"
+                                pred={r.predTotal}
+                                actual={scored ? h + a : null}
+                              />
+                            </>
+                          )
+                        })()}
 
                         {/* Prediction */}
                         <div className="text-right">

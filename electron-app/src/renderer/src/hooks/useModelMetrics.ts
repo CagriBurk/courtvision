@@ -34,6 +34,25 @@ export interface ModelMetricsData {
   evaluatedAt: string | null
   foldMetrics: FoldItem[]
   featureImportance: FeatureItem[]
+  winSource?: 'classifier' | 'margin'
+  lines?: Partial<Record<'margin' | 'total', LineModelMetrics>>
+}
+
+// Fark / toplam modelinin holdout özeti (04 → metrics_margin/total.json)
+export interface LineModelMetrics {
+  mae: number
+  baselineMae: number | null
+  baseline: string | null
+  lowSignal: boolean
+  rmse: number
+  bias: number
+  within10: number
+  ladderEce: number | null
+  ladderByOffset: { offset: number; meanPred: number; fracOver: number }[]
+  distribution: string | null
+  bands: { side: 'home' | 'away'; lo: number; hi: number | null; obs: number; pred: number }[]
+  nHoldoutGames: number | null
+  evaluatedAt: string | null
 }
 
 export const API_BASE = 'http://127.0.0.1:8765'

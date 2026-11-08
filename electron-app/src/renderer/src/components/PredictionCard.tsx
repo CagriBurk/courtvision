@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { Game, InjuredPlayer, Team, TopPlayer } from '../types'
 import WinProbBar from './WinProbBar'
 import { gameStatusLabel, isLive, lastName, predictionCorrect } from '../utils/game'
+import { fairHandicapLabel } from '../utils/lines'
 
 interface PredictionCardProps {
   game: Game
@@ -156,10 +157,42 @@ export default function PredictionCard({
         <span className="text-slate-300">{Math.round((1 - game.probHome) * 100)}%</span>
       </div>
 
+      {/* Handikap / toplam özeti */}
+      {game.lines?.spread && (
+        <div className="flex items-center justify-between mt-2 text-[11px] text-slate-400 bg-slate-900/40 rounded-md px-2 py-1">
+          <span title="Adil handikap: modelin iki tarafa eşit şans verdiği çizgi">
+            Handikap{' '}
+            <span className="text-slate-200 font-semibold">
+              {fairHandicapLabel(game.lines.spread, game.home.abbreviation, game.away.abbreviation)}
+            </span>
+          </span>
+          {game.lines.total && (
+            <span title={game.lines.total.lowSignal ? 'Toplam: tahmin gücü düşük' : 'Adil toplam'}>
+              Toplam{' '}
+              <span className="text-slate-200 font-semibold">
+                {game.lines.total.fairLine.toFixed(1)}
+              </span>
+              {game.lines.total.lowSignal && <span className="text-amber-500/80">*</span>}
+            </span>
+          )}
+          {game.lines.projected && (
+            <span title="Tahmini skor (ev - dep)">
+              <span className="text-slate-200 font-semibold tabular-nums">
+                {Math.round(game.lines.projected.home)}-{Math.round(game.lines.projected.away)}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Footer */}
       <div className="flex items-center gap-3 mt-3 text-xs text-slate-500">
         <span className={`flex items-center gap-1 ${live ? 'text-red-400 font-semibold' : ''}`}>
-          {live ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> : <Clock size={10} />}
+          {live ? (
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          ) : (
+            <Clock size={10} />
+          )}
           {gameStatusLabel(game)}
         </span>
         {game.venue && (

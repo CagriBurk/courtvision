@@ -342,4 +342,32 @@ def game_lines(dists: dict, pred_margin: float | None, pred_total: float | None)
     if "margin" in out and "total" in out:
         m, t = out["margin"]["pred"], out["total"]["pred"]
         out["projected"] = {"home": round((t + m) / 2, 1), "away": round((t - m) / 2, 1)}
+        # Takım skoru = (toplam ± fark) / 2; hatalar bağımsız kabul edilir
+        sd = float(np.hypot(out["margin"]["sigma"], out["total"]["sigma"]) / 2)
+        out["scores"] = {
+            "home": team_score_dist((t + m) / 2, sd),
+            "away": team_score_dist((t - m) / 2, sd),
+        }
     return out or None
+
+
+def team_score_dist(mean: float, sd: float, width: int = 5) -> dict:
+    """
+    One team's points: 5-point bins around the mean (±2.5 sd) and the most
+    likely 10-point window. With sd ≈ 11-12 no 5-point bin gets much more
+    than ~17%, a 10-point window ~33%.
+    """
+    def p_range(lo, hi):  # P(lo <= points <= hi), integer points
+        return float(ndtr((hi + 0.5 - mean) / sd) - ndtr((lo - 0.5 - mean) / sd))
+
+    start = int(np.floor((mean - 2.5 * sd) / width) * width)
+    stop = int(np.ceil((mean + 2.5 * sd) / width) * width)
+    bins = [{"lo": lo, "hi": lo + width - 1, "p": _round(p_range(lo, lo + width - 1))}
+            for lo in range(start, stop, width)]
+    best_lo = max(range(int(mean) - 15, int(mean) + 6), key=lambda lo: p_range(lo, lo + 9))
+    return {
+        "mean": round(float(mean), 1),
+        "sd": round(sd, 2),
+        "bins": bins,
+        "best10": {"lo": best_lo, "hi": best_lo + 9, "p": _round(p_range(best_lo, best_lo + 9))},
+    }

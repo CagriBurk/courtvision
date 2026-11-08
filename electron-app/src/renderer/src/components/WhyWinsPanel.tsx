@@ -2,6 +2,7 @@ import { TrendingUp, TrendingDown, MousePointerClick, AlertTriangle, Users } fro
 import { useState } from 'react'
 import { Game, InjuredPlayer, Team, TopPlayer } from '../types'
 import FormChart from './FormChart'
+import LinesPanel from './LinesPanel'
 
 function TeamLogoSmall({ team }: { team: Team }) {
   const [err, setErr] = useState(false)
@@ -168,6 +169,9 @@ export default function WhyWinsPanel({ game, onOpenTeam }: WhyWinsPanelProps) {
           </div>
         </div>
       </div>
+
+      {/* Handikap & toplam (Faz 5) */}
+      <LinesPanel game={game} />
 
       {/* Why wins section */}
       <div>

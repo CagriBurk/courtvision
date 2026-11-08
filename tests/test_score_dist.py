@@ -183,3 +183,19 @@ def test_evaluate_regression_and_win_source(tmp_path, monkeypatch):
     metrics = json.loads((tmp_path / "metrics.json").read_text())
     assert metrics["win_source"] == "margin"
     assert metrics["accuracy"] == 0.5  # existing win metrics are kept
+
+
+def test_team_score_ranges():
+    from score_dist import game_lines, team_score_dist
+
+    s = team_score_dist(110.4, 11.6)
+    assert sum(b["p"] for b in s["bins"]) > 0.98  # ±2.5 sd covered
+    assert max(b["p"] for b in s["bins"]) < 0.18  # no 5-point bin is likely
+    best = s["best10"]
+    assert best["hi"] - best["lo"] == 9 and best["lo"] <= 110.4 <= best["hi"]
+    assert 0.3 < best["p"] < 0.35
+
+    d = {"margin": const_dist("margin", 13.6), "total": const_dist("total", 18.85)}
+    g = game_lines(d, -12.0, 228.0)
+    assert g["scores"]["away"]["mean"] == pytest.approx(120.0)
+    assert g["scores"]["home"]["sd"] == pytest.approx(np.hypot(13.6, 18.85) / 2, abs=0.01)

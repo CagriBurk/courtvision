@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from feature_engineering import build_feature_matrix
+from feature_engineering import TARGET_COLS, build_feature_matrix
 
 # ---------------------------------------------------------------------------
 ROOT     = Path(__file__).parent.parent
@@ -63,7 +63,7 @@ def main():
     # Tamamen boş feature'ları çıkar (ör. Kaggle olmadan hiç dolmayan
     # pts_paint, qdiff gibi istatistikler). XGBoost bunlarda bölme yapamaz ama
     # colsample ile seçilen feature'ların bir kısmını boşa harcarlar.
-    meta = {"game_id", "game_date", "season_id", "season_type", "target",
+    meta = {"game_id", "game_date", "season_id", "season_type", *TARGET_COLS,
             "team_id_home", "team_abbreviation_home", "team_id_away", "team_abbreviation_away"}
     empty = [c for c in features.columns if c not in meta and features[c].isna().all()]
     if empty:
@@ -82,15 +82,12 @@ def main():
     print(f"  Feature matrix shape : {features.shape}")
     print(f"  Tarih aralığı        : {features['game_date'].min().date()} → {features['game_date'].max().date()}")
     print(f"  Ev sahibi win oranı  : {features['target'].mean():.3f}")
+    print(f"  Fark (ev - dep.)     : ort {features['target_margin'].mean():+.2f}, std {features['target_margin'].std():.2f}")
+    print(f"  Toplam sayı          : ort {features['target_total'].mean():.1f}, std {features['target_total'].std():.2f}")
     print(f"  Kayıt                : {feat_path}")
 
     # Feature grupları
-    feat_cols = [c for c in features.columns if c not in [
-        "game_id", "game_date", "season_id", "season_type",
-        "team_id_home", "team_abbreviation_home",
-        "team_id_away", "team_abbreviation_away",
-        "target",
-    ]]
+    feat_cols = [c for c in features.columns if c not in meta]
     home_feat  = [c for c in feat_cols if c.startswith("home_")]
     away_feat  = [c for c in feat_cols if c.startswith("away_")]
     diff_feat  = [c for c in feat_cols if c.startswith("diff_") or c.startswith("fatigue_")]

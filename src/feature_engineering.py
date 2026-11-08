@@ -15,6 +15,13 @@ import pandas as pd
 
 from elo_srs import compute_elo, compute_opponent_quality, compute_srs
 
+# Prediction targets carried in the game-level table. They describe the game's
+# own result, so they must never be used as features (see modeling.META_COLS).
+#   target        1 = home team won
+#   target_margin home points - away points (overtime included)
+#   target_total  home points + away points (overtime included)
+TARGET_COLS = ["target", "target_margin", "target_total"]
+
 
 # ---------------------------------------------------------------------------
 # 1. Team Game Log (Wide -> Tall conversion)
@@ -425,9 +432,16 @@ def pivot_to_game_level(
 
     game_feats = home.merge(away, on="game_id", how="inner")
 
+    # Skor hedefleri (yaklaşan maçlarda skor yok → NaN)
+    master_with_h2h = master_with_h2h.copy()
+    pts_h = pd.to_numeric(master_with_h2h.get("pts_home"), errors="coerce")
+    pts_a = pd.to_numeric(master_with_h2h.get("pts_away"), errors="coerce")
+    master_with_h2h["target_margin"] = pts_h - pts_a
+    master_with_h2h["target_total"] = pts_h + pts_a
+
     # H2H + Elo feature'larını ekle
     h2h_cols = [
-        "game_id", "target",
+        "game_id", *TARGET_COLS,
         "h2h_n_games", "h2h_home_win_rate", "h2h_home_win_rate_L5",
         "h2h_pts_diff_mean", "h2h_pts_diff_L5",
         # Elo (elo_srs.py tarafından master_with_h2h'a merge edildi)

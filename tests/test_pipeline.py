@@ -9,17 +9,12 @@ import pandas as pd
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from feature_engineering import build_feature_matrix, build_team_game_log, compute_team_rolling_features
+from feature_engineering import TARGET_COLS, build_feature_matrix, build_team_game_log, compute_team_rolling_features
+from modeling import META_COLS
 from season import current_season, season_id, season_start_year, season_str
 
 predict_today = importlib.import_module("05_predict_today")
 
-META_COLS = [
-    "game_id", "game_date", "season_id", "season_type",
-    "team_id_home", "team_abbreviation_home", "team_name_home",
-    "team_id_away", "team_abbreviation_away", "team_name_away",
-    "target",
-]
 
 TEAMS = ["101", "102", "103", "104"]
 
@@ -255,3 +250,30 @@ def test_explain_prediction_matches_model():
     # Elo drives the target, so it should be the biggest factor with the right sign
     assert factors[0]["label"] == "Elo gücü"
     assert np.sign(factors[0]["effect"]) == np.sign(row["elo_diff"].iloc[0])
+
+
+def test_score_targets_are_correct_and_never_features():
+    """target_margin / target_total come from the game's own score: they must
+    match the box score, be NaN for an upcoming game, and never be features."""
+    master = make_master()
+    feats, _ = build_feature_matrix(master)
+
+    merged = feats.merge(master[["game_id", "pts_home", "pts_away"]], on="game_id")
+    assert (merged["target_margin"] == merged["pts_home"] - merged["pts_away"]).all()
+    assert (merged["target_total"] == merged["pts_home"] + merged["pts_away"]).all()
+    assert ((merged["target_margin"] > 0) == (merged["target"] == 1)).all()
+
+    feat_cols = [c for c in feats.columns if c not in META_COLS]
+    assert not [c for c in feat_cols if c.startswith("target")]
+    assert set(TARGET_COLS) <= set(META_COLS)
+
+    # Live path: the upcoming game has no score yet
+    g = master.iloc[-1]
+    games = [{
+        "game_id": g["game_id"],
+        "home_team_id": int(g["team_id_home"]), "away_team_id": int(g["team_id_away"]),
+        "home_team_abbr": g["team_abbreviation_home"], "away_team_abbr": g["team_abbreviation_away"],
+        "home_team_name": g["team_name_home"], "away_team_name": g["team_name_away"],
+    }]
+    live = predict_today.compute_live_features(master, games, g["game_date"].date())
+    assert live.loc[g["game_id"], ["target_margin", "target_total"]].isna().all()

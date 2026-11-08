@@ -11,18 +11,19 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
 
+from feature_engineering import TARGET_COLS
 from season import nba_today, season_id, season_start_year
 
 ROOT       = Path(__file__).parent.parent
 PROC_DIR   = ROOT / "data" / "processed"
 MODELS_DIR = ROOT / "models"
 
-# Meta columns not used for modeling
+# Meta columns not used for modeling (ids, dates and every prediction target)
 META_COLS = [
     "game_id", "game_date", "season_id", "season_type",
     "team_id_home", "team_abbreviation_home", "team_name_home",
     "team_id_away", "team_abbreviation_away", "team_name_away",
-    "target",
+    *TARGET_COLS,
 ]
 
 # Fixed XGBoost params (Optuna tunes the rest)

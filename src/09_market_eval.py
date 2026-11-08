@@ -25,9 +25,16 @@ Input : data/processed/features.parquet, data/processed/market_lines.parquet,
 Output: data/processed/market_eval_preds.parquet (prediction cache)
         reports/market_eval.json
 
+Caveat: in training, player-absence features come from the game's own box
+score (who got no minutes), while live they come from the injury report.
+The model therefore knows, in hindsight, whether questionable players
+played, so w measured here is an upper bound for live use.
+--no-availability drops those features, which gives the lower bound.
+
 Usage:
-    python src/09_market_eval.py             # uses the cache when present
-    python src/09_market_eval.py --refresh   # retrain and rebuild the cache
+    python src/09_market_eval.py                     # uses the cache when present
+    python src/09_market_eval.py --refresh           # retrain and rebuild the cache
+    python src/09_market_eval.py --no-availability   # without player-absence features
 """
 
 import argparse
@@ -61,12 +68,19 @@ SETS        = [("oof", "OOF (holdout öncesi)"), ("holdout", "Holdout"), ("later
 # ---------------------------------------------------------------------------
 # 1. Predictions (cached)
 # ---------------------------------------------------------------------------
-def task_predictions(task: str, df: pd.DataFrame) -> pd.DataFrame:
+def is_availability_feature(col: str) -> bool:
+    """Player-absence features: in training they come from the game's own box score."""
+    return "missing_" in col
+
+
+def task_predictions(task: str, df: pd.DataFrame, no_availability: bool = False) -> pd.DataFrame:
     spec = TASKS[task]
     meta = json.loads((MODELS_DIR / spec["meta_file"]).read_text(encoding="utf-8"))
     params, holdout_season, target = meta["best_params"], meta["holdout_season"], spec["target"]
     with open(MODELS_DIR / "feature_columns.pkl", "rb") as f:   # same columns as 03 / 04
         feat_cols = [c for c in pickle.load(f) if c in df.columns]
+    if no_availability:
+        feat_cols = [c for c in feat_cols if not is_availability_feature(c)]
 
     df = df[df[target].notna()].reset_index(drop=True)
     dev, holdout = split_holdout(df, holdout_season)
@@ -103,11 +117,12 @@ def task_predictions(task: str, df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
-def build_predictions() -> pd.DataFrame:
+def build_predictions(path, no_availability: bool) -> pd.DataFrame:
     df, _ = load_feature_table()
-    preds = pd.concat([task_predictions(t, df) for t in ("win", "margin", "total")], ignore_index=True)
-    preds.to_parquet(PREDS_PATH, index=False)
-    print(f"Tahminler kaydedildi → {PREDS_PATH} ({len(preds)} satır)")
+    preds = pd.concat([task_predictions(t, df, no_availability) for t in ("win", "margin", "total")],
+                      ignore_index=True)
+    preds.to_parquet(path, index=False)
+    print(f"Tahminler kaydedildi → {path} ({len(preds)} satır)")
     return preds
 
 
@@ -230,26 +245,37 @@ def print_report(r: dict) -> None:
     print("  * harman: logit(p) = c + a·logit(piyasa) + b·logit(model), OOF'ta öğrenildi")
 
 
-def main(refresh: bool) -> None:
-    if refresh or not PREDS_PATH.exists():
+def main(refresh: bool, no_availability: bool) -> None:
+    preds_path, report_path = PREDS_PATH, REPORT_PATH
+    if no_availability:
+        preds_path = preds_path.with_name(preds_path.stem + "_noavail.parquet")
+        report_path = report_path.with_name(report_path.stem + "_noavail.json")
+        print("Oyuncu eksikliği özellikleri ÇIKARILDI (canlıdaki bilginin alt sınırı)")
+
+    if refresh or not preds_path.exists():
         print("Tahminler üretiliyor (OOF + holdout + sonrası, 3 görev)...")
-        preds = build_predictions()
+        preds = build_predictions(preds_path, no_availability)
     else:
-        preds = pd.read_parquet(PREDS_PATH)
-        print(f"Önbellekteki tahminler kullanılıyor: {PREDS_PATH} (yeniden üretmek için --refresh)")
+        preds = pd.read_parquet(preds_path)
+        print(f"Önbellekteki tahminler kullanılıyor: {preds_path} (yeniden üretmek için --refresh)")
 
     lines = load_market_lines()
     if lines.empty:
         raise SystemExit("Piyasa çizgisi yok. Önce: python src/espn_odds.py --backfill --season ...")
 
     report = analyse(preds, lines)
+    report["no_availability"] = no_availability
     print_report(report)
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(report, indent=2, default=float), encoding="utf-8")
-    print(f"\nRapor → {REPORT_PATH}")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, default=float), encoding="utf-8")
+    print(f"\nRapor → {report_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Model ile piyasa kapanış çizgilerinin kıyası")
     parser.add_argument("--refresh", action="store_true", help="tahminleri yeniden üret (eğitim yapar)")
-    main(parser.parse_args().refresh)
+    parser.add_argument("--no-availability", action="store_true",
+                        help="oyuncu eksikliği özellikleri olmadan (eğitimde maçın kendi kutu skorundan "
+                             "geldikleri için canlıdan iyimser; bu, bilginin alt sınırını verir)")
+    args = parser.parse_args()
+    main(args.refresh, args.no_availability)

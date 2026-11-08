@@ -1,9 +1,7 @@
 import type { ReactElement, ReactNode } from 'react'
-import { useState } from 'react'
 import {
   AlertTriangle,
   BookOpen,
-  Calculator,
   ClipboardCheck,
   Clock,
   Lightbulb,
@@ -53,77 +51,6 @@ function B({ children }: { children: ReactNode }): ReactElement {
   return <span className="text-white font-semibold">{children}</span>
 }
 
-// Model olasılığı + bahis oranı → adil oran, beklenen değer
-function ValueCalculator(): ReactElement {
-  const [prob, setProb] = useState('62')
-  const [odds, setOdds] = useState('1.75')
-  const p = Number(prob.replace(',', '.')) / 100
-  const o = Number(odds.replace(',', '.'))
-  const valid = p > 0 && p < 1 && o > 1
-  const fair = valid ? 1 / p : null
-  const ev = valid ? p * o - 1 : null
-  const verdict =
-    ev === null ? null : o >= (fair as number) * 1.05 ? 'value' : ev > 0 ? 'thin' : 'no'
-
-  return (
-    <div className="bg-slate-900/50 rounded-lg p-3 space-y-3">
-      <div className="flex gap-3">
-        <label className="flex-1 text-[11px] text-slate-400">
-          Model olasılığı (%)
-          <input
-            value={prob}
-            onChange={(e) => setProb(e.target.value)}
-            inputMode="decimal"
-            className="mt-1 w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm tabular-nums focus:outline-none focus:border-blue-500"
-          />
-        </label>
-        <label className="flex-1 text-[11px] text-slate-400">
-          iddaa oranı
-          <input
-            value={odds}
-            onChange={(e) => setOdds(e.target.value)}
-            inputMode="decimal"
-            className="mt-1 w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-white text-sm tabular-nums focus:outline-none focus:border-blue-500"
-          />
-        </label>
-      </div>
-      {valid ? (
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div>
-            <p className="text-white font-bold tabular-nums">{fair?.toFixed(2)}</p>
-            <p className="text-slate-500 text-[10px]">adil oran</p>
-          </div>
-          <div>
-            <p
-              className={`font-bold tabular-nums ${(ev as number) > 0 ? 'text-emerald-400' : 'text-red-400'}`}
-            >
-              {(ev as number) > 0 ? '+' : ''}
-              {((ev as number) * 100).toFixed(1)}%
-            </p>
-            <p className="text-slate-500 text-[10px]">beklenen değer</p>
-          </div>
-          <div>
-            <p
-              className={`font-bold text-sm ${
-                verdict === 'value'
-                  ? 'text-emerald-400'
-                  : verdict === 'thin'
-                    ? 'text-amber-400'
-                    : 'text-red-400'
-              }`}
-            >
-              {verdict === 'value' ? 'Değerli' : verdict === 'thin' ? 'Sınırda' : 'Değersiz'}
-            </p>
-            <p className="text-slate-500 text-[10px]">%5 güvenlik payıyla</p>
-          </div>
-        </div>
-      ) : (
-        <p className="text-slate-500 text-[11px]">Olasılık 0-100 arası, oran 1’den büyük olmalı.</p>
-      )}
-    </div>
-  )
-}
-
 export default function Guide(): ReactElement {
   const { data } = useModelMetrics()
   const margin = data?.lines?.margin
@@ -148,11 +75,12 @@ export default function Guide(): ReactElement {
             </p>
             <ul className="list-disc pl-5 space-y-1">
               <li>
-                <B>Sabah</B>: uygulamayı aç, 1-3 dakika bekle. Tahminler ve dünün sonuçları
-                kendiliğinden gelir.
+                <B>Sabah</B>: uygulamayı aç, 1-3 dakika bekle. Tahminler, piyasa çizgileri ve dünün
+                sonuçları kendiliğinden gelir.
               </li>
               <li>
-                <B>Öğlen</B>: <B>Veriyi Güncelle</B> (sakatlık raporu gün içinde değişir).
+                <B>Öğlen</B>: <B>Veriyi Güncelle</B> (sakatlık raporu ve çizgiler gün içinde
+                değişir).
               </li>
               <li>
                 <B>Akşam, maçlardan önce</B>: tekrar <B>Veriyi Güncelle</B>. Karneye geçen tahmin,
@@ -160,55 +88,46 @@ export default function Guide(): ReactElement {
               </li>
             </ul>
             <Tip>
-              Kupon yapmadan hemen önce bir kez güncelle: son dakika sakatlıkları en çok handikabı
-              ve toplamı oynatır.
+              Piyasa çizgisi yalnızca başlamamış maçlar için güncellenir; maç başladıktan sonra son
+              maç öncesi çizgi korunur.
             </Tip>
           </Card>
 
           <Card icon={<Target size={15} />} title="Maç kartı">
             <ul className="list-disc pl-5 space-y-1">
               <li>
-                <B>Çubuk ve yüzdeler</B>: iki takımın kazanma olasılığı. Güven rozeti: %65+ yüksek,
-                %55-65 orta, altı düşük.
+                <B>Çubuk ve yüzdeler</B>: modelin iki takıma verdiği kazanma olasılığı. Ortadaki gri{' '}
+                <B>piyasa</B> yüzdesi, kapanış oranlarından marjı çıkarılmış olasılık. Güven rozeti:
+                %65+ yüksek, %55-65 orta, altı düşük.
               </li>
               <li>
-                <B>Handikap · Toplam · Skor</B> satırı: modelin adil handikabı, adil toplamı ve
-                tahmini skoru. Toplamın yanındaki <span className="text-amber-500">*</span> “tahmin
-                gücü düşük” demek.
+                <B>Handikap · Toplam</B> satırı: piyasa çizgisi varsa onun etrafında kurulan adil
+                handikap ve toplam; yoksa modelinki. Toplamın yanındaki{' '}
+                <span className="text-amber-500">*</span> “tahmin gücü düşük” (yalnız model
+                kaynaklıysa) demek.
               </li>
               <li>
-                Karta tıklayınca sağda detay paneli açılır: handikap merdiveni, fark bantları, skor
-                aralıkları, “neden kazanır”.
+                Karta tıklayınca sağda detay paneli açılır: piyasa ve model çizgileri yan yana,
+                handikap merdiveni, fark bantları, skor aralıkları, “neden kazanır”.
               </li>
             </ul>
           </Card>
 
-          <Card icon={<Scale size={15} />} title="Adil çizgi ve adil oran">
+          <Card icon={<Scale size={15} />} title="Piyasa, model ve adil çizgi">
             <p>
-              <B>Adil çizgi</B>, modelin iki tarafa da %50 şans verdiği barem. Örneğin adil handikap{' '}
-              <B>LAL -12.5</B> ise model “LAL 13+ farkla kazanır” ile “kazanamaz” arasında kararsız.
+              <B>Piyasa çizgisi</B>, DraftKings’in maç öncesi handikap ve toplamı (ESPN’den, günde
+              birkaç kez). Panelin olasılıkları bu çizgi etrafında, piyasanın geçmiş 3 sezondaki
+              hata dağılımıyla kurulur.
             </p>
             <p>
-              <B>Adil oran = 1 / olasılık</B>. %62’lik bir seçeneğin adil oranı 1.61. iddaa bu
-              seçeneğe <B>1.61’den yüksek</B> oran veriyorsa model bahsi değerli görür.
+              <B>Model</B> satırı modelin kendi adil çizgisi. Piyasadan 4+ sayı ayrıldığında sarı
+              uyarı çıkar: geçmişte bu ayrılıklar çoğunlukla modelin hatasıydı.
             </p>
             <p>
+              <B>Adil oran = 1 / olasılık</B>. %62’lik bir seçeneğin adil oranı 1.61.{' '}
               <B>Merdiven</B> üstten alta en güvenliden en riskliye sıralı: handikap büyüdükçe
-              olasılık düşer, adil oran yükselir. Aynı maç için iddaa’nın açtığı farklı baremlerden,
-              adil orana göre en iyi fiyatlananı seçebilirsin.
+              olasılık düşer, adil oran yükselir.
             </p>
-          </Card>
-
-          <Card icon={<Calculator size={15} />} title="Değer hesaplayıcı">
-            <p className="text-slate-400 text-[12px]">
-              Panelden bir seçeneğin olasılığını, iddaa’dan oranını yaz. Beklenen değer = olasılık ×
-              oran − 1.
-            </p>
-            <ValueCalculator />
-            <Tip>
-              <B>%5 güvenlik payı</B>: model bahis şirketinden az şey bilebilir (son dakika kadro,
-              hakem). Oran adil oranı ancak belirgin şekilde geçiyorsa değerli say.
-            </Tip>
           </Card>
 
           <Card icon={<TrendingUp size={15} />} title="Modeller ne kadar iyi?">
@@ -224,37 +143,35 @@ export default function Guide(): ReactElement {
                 <B>{margin ? `${margin.mae.toFixed(1)} sayı` : '—'}</B>
                 {margin?.baselineMae != null &&
                   ` (basit Elo tahmini ${margin.baselineMae.toFixed(1)})`}
-                . Barem olasılıkları gerçekleşen oranlarla uyumlu.
+                . Piyasanın kapanış çizgisi aynı sezonda 10.9 sayı.
               </li>
               <li>
                 <B>Toplam</B>: ortalama hata <B>{total ? `${total.mae.toFixed(1)} sayı` : '—'}</B>
                 {total?.baselineMae != null &&
                   ` (son 10 maç ortalaması ${total.baselineMae.toFixed(1)})`}
-                .
-                {total?.lowSignal &&
-                  ' Basit ortalamadan iyi değil; olasılıklar dürüst ama avantaj sağlamaz.'}
+                ; piyasa 14.6 sayı.
               </li>
             </ul>
-            <p className="text-slate-500 text-[11px]">Ayrıntı: Model Metrikleri sayfası.</p>
+            <Tip>
+              Model, halka açık verilerle piyasaya çok yaklaşıyor ama 2012’den bu yana 16 bin maçta
+              piyasanın bilmediği bir şey bilmediği görüldü: ayrıldığı yerlerde haklı çıkmadı. Bu
+              yüzden olasılıklar piyasa merkezli, model ikinci görüş. Ayrıntı: EVALUATION.md.
+            </Tip>
           </Card>
 
           <Card icon={<Lightbulb size={15} />} title="İpuçları">
             <ul className="list-disc pl-5 space-y-1">
               <li>
-                <B>Handikap toplamdan daha güvenilir.</B> Takımlar arasındaki kalite farkı
+                <B>Handikap toplamdan daha öngörülebilir.</B> Takımlar arasındaki kalite farkı
                 kalıcıdır; toplam ise üçlük şansı ve uzatmaya bağlı.
               </li>
               <li>
-                <B>Toplamda yarım-bir sayıya güvenme.</B> iddaa çizgisi adil çizgiden birkaç sayı
-                uzaksa bakmaya değer.
+                <B>Birden çok seçimin birlikte tutması zordur.</B> %70’lik üç seçimin birlikte tutma
+                ihtimali %34.
               </li>
               <li>
-                <B>Kombinede marj çarpılır.</B> 3 maçlık kupon ancak her ayağı ayrı ayrı değerliyse
-                değerlidir; %70’lik üç seçimin birlikte tutma ihtimali %34.
-              </li>
-              <li>
-                <B>Aynı maçtan iki seçim koyma.</B> Kazanan ve handikap birbirine bağlıdır,
-                olasılıkları çarpılamaz.
+                <B>Aynı maçtan iki seçim bağımsız değildir.</B> Kazanan ve handikap birbirine
+                bağlıdır, olasılıkları çarpılamaz.
               </li>
               <li>
                 <B>Skor aralıkları geniştir.</B> Bir takımın skoru ±11-12 sayı oynar; 10 sayılık en
@@ -266,8 +183,8 @@ export default function Guide(): ReactElement {
           <Card icon={<AlertTriangle size={15} />} title="Dikkat">
             <ul className="list-disc pl-5 space-y-1">
               <li>
-                <B>Sezonun ilk haftaları</B>: son-10 ve sezon istatistikleri az maça dayanır,
-                tahminler daha belirsiz.
+                <B>Sezonun ilk haftaları</B>: son-10 ve sezon istatistikleri az maça dayanır;
+                modelin çizgisi piyasadan daha uç olabilir.
               </li>
               <li>
                 <B>Playoff</B>: model normal sezon için kurulu, playoff tahminleri güvenilir
@@ -278,7 +195,8 @@ export default function Guide(): ReactElement {
                 Güncelle.
               </li>
               <li>
-                Model bir referanstır, garanti değil. Kaybetmeyi göze alamayacağın parayla oynama.
+                <B>ESPN çizgi vermezse</B> (nadiren) o gün olasılıklar modelden kurulur ve ekranda
+                “piyasa çizgisi yok” yazar.
               </li>
             </ul>
           </Card>
@@ -288,41 +206,37 @@ export default function Guide(): ReactElement {
               <li>
                 Üç handikap kuponu: <B>Güvenli</B> (ayak başı %68-80), <B>Dengeli</B> (%58-68),{' '}
                 <B>Riskli</B> (%50-58). Favori her zaman handikap verir (-1.5 ve üstü); hafif
-                favoriler güvenli kupona giremez. Risk arttıkça handikap büyür.
+                favoriler güvenli kupona giremez.
               </li>
               <li>
-                <B>Üst (deneysel)</B> kuponu: aynı maçlarda ≈%62&apos;lik üst baremleri. Toplam
-                modeli zayıf olduğu için karnede ayrı izlenir; karma kupon yapacaksan aynı maçın
-                handikabı ile üstünü birlikte koyma.
+                Olasılıklar piyasa çizgisi etrafında kurulur. Kupona piyasa çizgisi olan, başlamamış
+                maçlar girer.
               </li>
               <li>
-                <B>Piyasa kontrolü:</B> ayağın yanındaki <B>adil</B> çizgiye bak. iddaa&apos;nın
-                baremleri bundan 4+ sayı uzaksa (adil MIA -3.5, iddaa en düşük MIA -7.5) piyasa bir
-                şey biliyor olabilir; o ayağı çıkar.
+                <B>Her maç en fazla bir kupona girer</B>: güvenli kupon büyük favorileri, dengeli
+                ortadakileri, riskli kalanları alır. Ayak sayısı uygun maç sayısına göre 2-3.
               </li>
               <li>
-                Sadece iki modelin aynı tarafı benzer olasılıkla gösterdiği maçlar girer; ayak
-                sayısı (2-4) güçlü maç sayısına göre. Kalabalık gün diye 4 ayak zorlanmaz.
+                Eski <B>Üst (deneysel)</B> kuponu kaldırıldı: toplam modelinin tarafı piyasaya karşı
+                %47 tuttu.
               </li>
-              <li>
-                Her ayağın <B>en az</B> oranı: iddaa o seçeneğe bunun altında oran veriyorsa o ayak
-                değerli değil. Kuponun “en az toplam oranı” da aynı mantık.
-              </li>
-              <li>
-                Kupon, maçlarından biri başlayınca kilitlenir. Oynadığın kuponun toplam oranını
-                kaydedersen hemen kilitlenir ve karnede kâr/zarar hesaplanır (isteğe bağlı).
-              </li>
+              <li>Kupon, maçlarından biri başlayınca kilitlenir ve karneye o haliyle geçer.</li>
             </ul>
           </Card>
 
           <Card icon={<ClipboardCheck size={15} />} title="Karne">
             <p>
-              Asıl soru: <B>model %70 dediğinde gerçekten ~%70 tutuyor mu?</B> Karne bunu taraf,
-              handikap baremleri ve alt/üst için ayrı ayrı gösterir. Her maç 9 handikap baremi
-              eklediği için handikap tablosu birkaç haftada anlamlı hale gelir.
+              Asıl soru: <B>%70 dendiğinde gerçekten ~%70 tutuyor mu?</B> Karne bunu taraf, handikap
+              baremleri ve alt/üst için ayrı ayrı gösterir. Her maç 9 handikap baremi eklediği için
+              handikap tablosu birkaç haftada anlamlı hale gelir.
+            </p>
+            <p>
+              <B>Model ↔ Piyasa</B> sekmesi aynı maçlarda modelin ve piyasanın hatasını yan yana
+              koyar; canlı <B>w</B> değeri modelin piyasaya bir şey katıp katmadığını ölçer (birkaç
+              yüz maç sonra anlamlı).
             </p>
             <Tip>
-              Kupon tutma oranı küçük örneklerde çok oynar. Modelin dürüstlüğünü barem ve ayak
+              Kupon tutma oranı küçük örneklerde çok oynar. Dürüstlüğü barem ve ayak
               kalibrasyonundan oku; mavi çizgi gri şeridin içindeyse o seviyede vaat tutuyor.
             </Tip>
           </Card>
@@ -335,7 +249,8 @@ export default function Guide(): ReactElement {
             </p>
             <p>
               <B>Modeli yeniden eğitmek</B> için uygulamayı kapat ve proje klasöründeki{' '}
-              <B>MODEL_EGIT.bat</B>’a çift tıkla (yaklaşık 2 saat). Bitince uygulamayı yeniden aç.
+              <B>MODEL_EGIT.bat</B>’a çift tıkla (yaklaşık 2 saat), ardından piyasa kıyasını
+              güncelle: <B>src/09_market_eval.py --refresh</B>. Bitince uygulamayı yeniden aç.
               Sezonda ayda bir yeterli.
             </p>
           </Card>

@@ -12,6 +12,7 @@ Output:
   data/live/today_schedule.json
   data/live/live_features.parquet
   data/processed/master_games.parquet  (current season refreshed)
+  data/processed/market_lines.parquet  (today's ESPN / DraftKings lines)
   reports/predictions_YYYY-MM-DD.html
 
 Usage:
@@ -29,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from espn_odds import update_today_lines
 from feature_engineering import build_feature_matrix
 from modeling import TASKS, apply_calibration, explain_prediction
 from nba_data_client import (
@@ -530,6 +532,13 @@ def main(target_date: date | None = None):
 
     schedule_path = LIVE_DIR / "today_schedule.json"
     schedule_path.write_text(json.dumps(games, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Piyasa çizgileri (ESPN / DraftKings): tek istek, yalnız başlamamış maçlar güncellenir
+    try:
+        market = update_today_lines(target_date, games)
+        print(f"Piyasa çizgisi: {len(market)}/{len(games)} maç")
+    except Exception as e:
+        print(f"  [UYARI] Piyasa çizgileri alınamadı: {e}")
 
     # Feature'lar (eğitimle aynı pipeline) + tahminler.
     # Başlamış/bitmiş maçlar da tahmin edilir: feature'lar sadece önceki

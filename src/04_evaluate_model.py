@@ -69,7 +69,16 @@ from modeling import (
     regression_metrics,
     split_holdout,
 )
-from score_dist import fit_distribution, ladder_eval, prob_over
+from score_dist import (
+    band_table,
+    center,
+    crps,
+    fit_distribution,
+    fit_mean_map,
+    ladder_eval,
+    prob_between,
+    prob_over,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -433,6 +442,44 @@ def _save_distribution(task: str, params: dict) -> None:
     DIST_PATH.write_text(json.dumps(dists, indent=2), encoding="utf-8")
 
 
+def _build_dist(task: str, y, pred, mean_corr: bool) -> dict:
+    """Error distribution of `pred` vs `y`, optionally around a corrected mean."""
+    mm = fit_mean_map(y, pred) if mean_corr else None
+    c = center({"mean_map": mm}, pred)
+    return fit_distribution(task, np.asarray(y, dtype=float) - c, c, mm)
+
+
+def _choose_distribution(task: str, candidates: list[dict], y_h, pred_h) -> dict:
+    """Scores every candidate on the holdout, prints the table, returns the best CRPS."""
+    is_margin = task == "margin"
+    for c in candidates:
+        c["crps"] = crps(c["params"], y_h, pred_h)
+        c["ladder"] = ladder_eval(c["params"], y_h, pred_h)
+        c["brier"], c["ece"] = c["ladder"]["brier"], c["ladder"]["ece"]
+        if is_margin:
+            c["tail_26"] = float(1 - prob_between(c["params"], pred_h, -25, 25).mean())
+            c["close_1_5"] = float(prob_between(c["params"], pred_h, -5, 5).mean())
+    chosen = min(candidates, key=lambda c: c["crps"])
+
+    print("\n  Dağılım adayları (CRPS = tüm dağılımın skoru, düşük iyi; seçim buna göre):")
+    print(f"    {'aday':36}{'CRPS':>8}{'Brier':>8}{'ECE':>8}" + (f"{'26+':>8}{'1-5':>8}" if is_margin else ""))
+    for c in candidates:
+        line = f"    {c['name']:36}{c['crps']:>8.4f}{c['brier']:>8.4f}{c['ece']:>8.4f}"
+        if is_margin:
+            line += f"{c['tail_26'] * 100:>7.1f}%{c['close_1_5'] * 100:>7.1f}%"
+        print(line + ("  ← seçildi" if c is chosen else ""))
+    if is_margin:
+        y_h = np.asarray(y_h)
+        print(f"    {'gerçekleşen':36}{'':24}{np.mean(np.abs(y_h) >= 26) * 100:>7.1f}%"
+              f"{np.mean(np.abs(y_h) <= 5) * 100:>7.1f}%")
+
+    print(f"\n  Seçilen: {chosen['name']}")
+    print("    Barem farkı → tahmini üst olasılığı → gerçekleşen üst oranı:")
+    for r in chosen["ladder"]["by_offset"]:
+        print(f"      {r['offset']:+3d}: %{r['mean_pred'] * 100:5.1f} → %{r['frac_over'] * 100:5.1f}")
+    return chosen
+
+
 def evaluate_regression(task: str) -> dict | None:
     """Margin or total model. Returns its holdout predictions or None."""
     spec = TASKS[task]
@@ -482,25 +529,43 @@ def evaluate_regression(task: str) -> dict | None:
         print(f"    Sezon {sid}: sapma {np.mean(oof[m] - y_dev[m]):+5.2f}  MAE {np.mean(np.abs(oof[m] - y_dev[m])):5.2f}  ({m.sum()} maç)")
 
     # ---- 2. Hata dağılımı (son fold'lar) ----
-    print(f"\n[2/3] Hata dağılımı (son {RECENT_FOLDS} fold'un OOF hataları)...")
-    recent = fold_of >= 5 - RECENT_FOLDS
-    dist = fit_distribution(task, y_dev[recent] - oof[recent], oof[recent])
-    diag = dist["diagnostics"]
-    print(f"  {diag['n']} maç | RMS hata {diag['rms']:.2f} | sapma {diag['bias']:+.2f}")
-    print("  Tahmin büyüklüğüne göre hata (" + ("|tahmin|" if task == "margin" else "tahmin") + "):")
+    # Pencere: hangi OOF hataları (lig son sezonlarda daha dalgalı); ortalama
+    # düzeltmesi: tahminler ortalamaya sıkışmış mı; şekil: normal / t / ampirik.
+    windows = {
+        f"son {RECENT_FOLDS} fold": fold_of >= 5 - RECENT_FOLDS,
+        "son fold": fold_of == 4,
+    }
+    print("\n[2/3] Hata dağılımı adayları (OOF hatalarından)...")
+    candidates = []
+    for wname, mask in windows.items():
+        mm = fit_mean_map(y_dev[mask], oof[mask])
+        rms = np.sqrt(np.mean((y_dev[mask] - oof[mask]) ** 2))
+        print(f"  {wname}: {mask.sum()} maç | RMS hata {rms:.2f} | gerçek ≈ {mm['a']:+.2f} + {mm['b']:.3f} × tahmin")
+        for mean_corr in (False, True):
+            base = _build_dist(task, y_dev[mask], oof[mask], mean_corr)
+            for shape in ("normal", "t", "kde"):
+                candidates.append({
+                    "name": f"{wname} | {'düzeltilmiş' if mean_corr else 'ham'} | {shape}",
+                    "window": wname, "mean_corr": mean_corr, "shape": shape,
+                    "params": {**base, "shape": shape},
+                })
+    default = candidates[0]  # son 3 fold | ham | normal (ilk sürüm)
+    diag = default["params"]["diagnostics"]
+    print(f"  Tahmin büyüklüğüne göre hata (son {RECENT_FOLDS} fold, "
+          + ("|tahmin|" if task == "margin" else "tahmin") + "):")
     for b in diag["bins"]:
         print(f"    ~{b['x_mean']:6.1f}: RMS {b['rms']:.2f}  ({b['n']} maç)")
-    if dist["sigma"]["kind"] == "linear":
-        s = dist["sigma"]
-        print(f"  → Sapma tahmine bağlı (eğilim uçtan uca ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f}): "
-              f"sigma = {s['a']:.2f} {s['b']:+.4f} × x  [{s['min']:.2f}, {s['max']:.2f}]")
+    sig = default["params"]["sigma"]
+    if sig["kind"] == "linear":
+        print(f"  → Sapma tahmine bağlı (eğilim ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f}): "
+              f"sigma = {sig['a']:.2f} {sig['b']:+.4f} × x  [{sig['min']:.2f}, {sig['max']:.2f}]")
     else:
-        print(f"  → Sabit sigma {dist['sigma']['value']:.2f} "
-              f"(eğilim uçtan uca ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f})")
+        print(f"  → Sabit sigma {sig['value']:.2f} (eğilim ×{diag['spread_ratio']:.2f}, t={diag['slope_t']:.1f})")
 
     # ---- 3. Holdout ----
     result = None
     holdout_out = None
+    chosen, dist = default, default["params"]
     if len(holdout):
         print(f"\n[3/3] Holdout: sezon {holdout_season} ({len(holdout)} maç)...")
         model = make_model(task, params)
@@ -513,30 +578,51 @@ def evaluate_regression(task: str) -> dict | None:
         _print_reg("Model", hold_m)
         _print_reg("Taban", base_m)
         print(f"    (Taban: {base_desc})")
+        mm_h = fit_mean_map(y_h, pred_h)
+        print(f"    Holdout'ta gerçek ≈ {mm_h['a']:+.2f} + {mm_h['b']:.3f} × tahmin  (b > 1: tahminler sıkışık)")
 
-        shapes = {}
-        for shape in ("normal", "kde"):
-            shapes[shape] = ladder_eval({**dist, "shape": shape}, y_h, pred_h)
-        best = min(shapes, key=lambda s: shapes[s]["brier"])
-        dist["shape"] = best
-        print("\n  Barem kalibrasyonu (tahminin ±8 sayısındaki 9 barem, her maç):")
-        for shape, ev in shapes.items():
-            mark = "  ← seçildi" if shape == best else ""
-            print(f"    {shape:<6}: Brier {ev['brier']:.4f}  ECE {ev['ece']:.4f}{mark}")
-        ev = shapes[best]
-        print("    Barem farkı → tahmini üst olasılığı → gerçekleşen üst oranı:")
-        for r in ev["by_offset"]:
-            print(f"      {r['offset']:+3d}: %{r['mean_pred'] * 100:5.1f} → %{r['frac_over'] * 100:5.1f}")
+        chosen = _choose_distribution(task, candidates, y_h, pred_h)
+        bands = None
+        if task == "margin":
+            bands = band_table(chosen["params"], y_h, pred_h)
+            first = band_table(default["params"], y_h, pred_h)
+            print(f"\n    {'Fark bandı':12}{'gerçek':>8}{'seçilen':>9}{'ilk sürüm':>11}")
+            for b, f0 in zip(bands, first):
+                side = "Ev" if b["side"] == "home" else "Dep"
+                label = f"{side} {b['lo']}-{b['hi']}" if b["hi"] else f"{side} {b['lo']}+"
+                print(f"    {label:12}{b['obs'] * 100:>7.1f}%{b['pred'] * 100:>8.1f}%{f0['pred'] * 100:>10.1f}%")
+
+        # Üretim dağılımı: seçilen yapılandırma, pencere + holdout hatalarıyla
+        # yeniden öğrenilir (canlı model de holdout dahil tüm veriyle eğitildi)
+        mask = windows[chosen["window"]]
+        dist = _build_dist(task, np.concatenate([y_dev[mask], y_h]),
+                           np.concatenate([oof[mask], pred_h]), chosen["mean_corr"])
+        dist["shape"] = chosen["shape"]
+        dist["selected"] = chosen["name"]
+        s = dist["sigma"]
+        mm = dist.get("mean_map")
+        print(f"\n  Üretim dağılımı (pencere + holdout, {dist['diagnostics']['n']} maç): "
+              f"sigma {s.get('value', float('nan')):.2f} ({s['kind']}) | şekil {dist['shape']}"
+              + (f" (t df={dist['t_df']:.0f})" if dist["shape"] == "t" else "")
+              + (f" | düzeltme {mm['a']:+.2f} + {mm['b']:.3f} × tahmin" if mm else ""))
 
         result = {
             "headline": "holdout",
             "holdout": hold_m,
             "baseline": {**base_m, "description": base_desc},
-            "ladder": {"chosen": best, **{s: shapes[s] for s in shapes}},
+            "holdout_mean_map": mm_h,
+            "ladder": {"chosen": chosen["name"], **chosen["ladder"]},
+            "candidates": [
+                {k: c[k] for k in ("name", "window", "mean_corr", "shape", "crps", "brier", "ece",
+                                   "tail_26", "close_1_5") if k in c}
+                for c in candidates
+            ],
+            "bands": bands,
         }
-        holdout_out = {"game_ids": holdout["game_id"].astype(str).values, "pred": pred_h, "dist": dist}
+        holdout_out = {"game_ids": holdout["game_id"].astype(str).values, "pred": pred_h,
+                       "dist": chosen["params"]}
     else:
-        print("\n[3/3] Holdout yok (03 --no-holdout) — şekil normal kabul edildi.")
+        print("\n[3/3] Holdout yok (03 --no-holdout) — ilk aday kullanıldı.")
 
     metrics_out = {
         "task":            task,

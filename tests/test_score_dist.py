@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import modeling
 from score_dist import (
     MARGIN_BANDS,
+    center,
+    crps,
     fair_line,
+    fit_mean_map,
     fit_distribution,
     ladder_eval,
     prob_between,
@@ -99,6 +102,39 @@ def test_fit_sigma_that_grows_with_the_prediction():
     assert lo == pytest.approx(11, rel=0.1) and hi == pytest.approx(19, rel=0.1)
 
 
+def test_t_shape_fits_heavy_tails_and_keeps_variance():
+    rng = np.random.default_rng(5)
+    resid = 12 * rng.standard_t(4, 30000) / np.sqrt(2)  # unit-variance t(4) scaled to sd 12
+    d = fit_distribution("margin", resid, np.zeros_like(resid))
+    assert d["t_df"] <= 6
+    t = {**d, "shape": "t", "no_tie": False}
+    k, p = score_pmf(t, [0.0])
+    sd = np.sqrt((p * k ** 2).sum())
+    assert sd == pytest.approx(d["sigma"]["value"], rel=0.03)
+    # Heavier tails than the normal with the same spread, fewer games near the center
+    n = {**d, "shape": "normal", "no_tie": False}
+    assert prob_over(t, 0.0, 30.5)[0] > prob_over(n, 0.0, 30.5)[0]
+    assert prob_between(t, 0.0, -3, 3)[0] > prob_between(n, 0.0, -3, 3)[0]  # peakier center
+    # ...and they describe this data better
+    y = np.round(resid[:3000])
+    assert crps(t, y, np.zeros(3000)) <= crps(n, y, np.zeros(3000)) + 1e-3
+
+
+def test_mean_map_stretches_compressed_predictions():
+    rng = np.random.default_rng(6)
+    truth = rng.normal(0, 9, 20000)
+    y = np.round(truth + rng.normal(0, 12, 20000))
+    pred = 0.7 * truth  # model shrinks toward 0
+    mm = fit_mean_map(y, pred)
+    assert mm["b"] == pytest.approx(1 / 0.7, rel=0.08)
+    raw = fit_distribution("margin", y - pred, pred)
+    c = center({"mean_map": mm}, pred)
+    fixed = fit_distribution("margin", y - c, c, mm)
+    assert crps(fixed, y, pred) < crps(raw, y, pred)
+    # The stored correction is applied at use time: a strong favorite gets a bigger margin
+    assert fair_line(fixed, [10.0])[0] > fair_line(raw, [10.0])[0]
+
+
 def test_ladder_is_calibrated_when_the_distribution_is_right():
     rng = np.random.default_rng(3)
     mu = rng.normal(0, 7, 4000)
@@ -131,7 +167,11 @@ def test_evaluate_regression_and_win_source(tmp_path, monkeypatch):
     assert dists["margin"]["no_tie"] and not dists["total"]["no_tie"]
     m = json.loads((tmp_path / "metrics_margin.json").read_text())
     assert m["headline"] == "holdout" and m["n_holdout_games"] == 200
-    assert m["ladder"]["chosen"] in ("normal", "kde")
+    assert len(m["candidates"]) == 12  # 2 windows x 2 mean options x 3 shapes
+    best = min(m["candidates"], key=lambda c: c["crps"])
+    assert m["ladder"]["chosen"] == best["name"] == dists["margin"]["selected"]
+    assert dists["margin"]["shape"] == best["shape"]
+    assert len(m["bands"]) == 12 and "bands" in json.loads((tmp_path / "metrics_total.json").read_text())
     assert "description" in m["baseline"]
 
     # Fake classifier that knows nothing: the margin model must take over

@@ -10,11 +10,17 @@ so any betting line can be priced from one model:
 The error distribution is learned from the walk-forward out-of-fold
 residuals of 04_evaluate_model.py and saved in models/distribution.json:
 
-  sigma  spread of the error: constant, or a linear function of the
-         prediction when the residual spread clearly depends on it
-  shape  "normal", or "kde" (smoothed empirical shape of the standardized
-         residuals); 04 picks whichever is better calibrated on the holdout
-  no_tie NBA games cannot end level, so a margin of 0 gets no probability
+  mean_map  optional straight-line correction of the prediction
+            (a + b * pred): regularized trees shrink predictions toward the
+            average, which thins the tails (blowouts)
+  sigma     spread of the error: constant, or a linear function of the
+            prediction when the residual spread clearly depends on it
+  shape     "normal", "t" (Student-t, heavier tails) or "kde" (smoothed
+            empirical shape of the standardized residuals)
+  no_tie    NBA games cannot end level, so a margin of 0 gets no probability
+
+04 builds several candidates (residual window x mean correction x shape)
+and keeps the one with the best CRPS on the holdout season.
 
 A "line" is a threshold on the target itself: over = target > line. For the
 margin, line 12.5 means "home wins by 13+" and line -12.5 means "away wins
@@ -24,6 +30,7 @@ by 12 or less, or home wins".
 from __future__ import annotations
 
 import numpy as np
+from scipy import stats
 from scipy.special import ndtr
 
 # Kazanma farkı bantları (her iki taraf için), son bant üstü açık
@@ -37,6 +44,7 @@ N_SIGMA_BINS = 5
 N_QUANTILES = 201
 _SUPPORT_SIGMAS = 8       # tahminin ±8 sigma'sı kadar tam sayı skor değerlendirilir
 _CDF_GRID = np.linspace(-12, 12, 4801)
+_T_DF_GRID = (3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 30, 50, 100)
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +55,24 @@ def _scale_input(task_or_on: str, pred):
     return np.abs(pred) if task_or_on in ("margin", "abs_pred") else pred
 
 
-def fit_distribution(task: str, resid, pred) -> dict:
+def fit_mean_map(y, pred) -> dict:
+    """actual ≈ a + b * pred on out-of-fold data; b > 1 = predictions too compressed."""
+    b, a = np.polyfit(np.asarray(pred, dtype=float), np.asarray(y, dtype=float), 1)
+    return {"a": float(a), "b": float(b)}
+
+
+def center(params: dict, mu) -> np.ndarray:
+    """Prediction after the optional mean correction."""
+    mu = np.atleast_1d(np.asarray(mu, dtype=float))
+    m = params.get("mean_map")
+    return mu if not m else m["a"] + m["b"] * mu
+
+
+def fit_distribution(task: str, resid, pred, mean_map: dict | None = None) -> dict:
     """
-    Error distribution from out-of-fold residuals (actual - predicted).
+    Error distribution from out-of-fold residuals (actual - center), where
+    `pred` is the (already corrected) center and `mean_map` the correction
+    applied to raw predictions at use time.
     Margin spread is checked against |prediction| (blowout vs close game),
     total spread against the prediction itself (high vs low scoring game).
     """
@@ -64,6 +87,8 @@ def fit_distribution(task: str, resid, pred) -> dict:
     bins = []
     for b in range(N_SIGMA_BINS):
         m = idx == b
+        if m.sum() < 2:
+            continue  # aynı tahminler kantilleri çakıştırabilir
         bins.append({
             "x_mean": float(x[m].mean()),
             "rms": float(np.sqrt(np.mean(resid[m] ** 2))),
@@ -77,13 +102,16 @@ def fit_distribution(task: str, resid, pred) -> dict:
     # Sigma ancak doğru uçtan uca belirgin değişiyorsa VE eğim gürültüden
     # açıkça büyükse tahmine bağlı olur; küçük örnekte rastgele dalgalanma
     # tek başına oranı 1.2'ye çıkarabilir.
-    se = rms / np.sqrt(2 * w)
-    slope, intercept = np.polyfit(xs, rms, 1, w=1 / se)
-    wt = 1 / se ** 2
-    x_bar = np.sum(wt * xs) / wt.sum()
-    slope_t = float(abs(slope) * np.sqrt(np.sum(wt * (xs - x_bar) ** 2)))
-    fitted = intercept + slope * xs
-    ratio = float(fitted.max() / fitted.min()) if fitted.min() > 0 else np.inf
+    slope = intercept = 0.0
+    slope_t, ratio = 0.0, 1.0
+    if len(bins) >= 3 and np.ptp(xs) > 0 and (rms > 0).all():
+        se = rms / np.sqrt(2 * w)
+        slope, intercept = np.polyfit(xs, rms, 1, w=1 / se)
+        wt = 1 / se ** 2
+        x_bar = np.sum(wt * xs) / wt.sum()
+        slope_t = float(abs(slope) * np.sqrt(np.sum(wt * (xs - x_bar) ** 2)))
+        fitted = intercept + slope * xs
+        ratio = float(fitted.max() / fitted.min()) if fitted.min() > 0 else np.inf
 
     overall = float(np.sqrt(np.mean(resid ** 2)))
     if ratio >= HETERO_MIN_RATIO and slope_t >= HETERO_MIN_T:
@@ -96,10 +124,11 @@ def fit_distribution(task: str, resid, pred) -> dict:
         sigma = {"kind": "const", "value": overall}
 
     params = {
-        "task":   task,
-        "shape":  "normal",
-        "sigma":  sigma,
-        "no_tie": task == "margin",
+        "task":     task,
+        "shape":    "normal",
+        "mean_map": mean_map,
+        "sigma":    sigma,
+        "no_tie":   task == "margin",
         "diagnostics": {
             "n": int(len(resid)),
             "bias": float(resid.mean()),        # > 0: model az tahmin ediyor
@@ -119,6 +148,12 @@ def fit_distribution(task: str, resid, pred) -> dict:
     zq = np.quantile(z, np.linspace(0, 1, N_QUANTILES)) * shrink
     params["z"] = [round(float(v), 4) for v in zq]
     params["h"] = float(h * shrink)
+
+    # Student-t: serbestlik derecesi en yüksek olabilirlikle (birim varyansa ölçekli)
+    def loglik(df):
+        s = np.sqrt((df - 2) / df)
+        return float(np.sum(stats.t.logpdf(z / s, df)) - len(z) * np.log(s))
+    params["t_df"] = float(max(_T_DF_GRID, key=loglik))
     return params
 
 
@@ -138,6 +173,9 @@ def _std_cdf(params: dict, z: np.ndarray) -> np.ndarray:
     """CDF of the standardized error."""
     if params["shape"] == "normal":
         return ndtr(z)
+    if params["shape"] == "t":
+        df = params["t_df"]
+        return stats.t.cdf(z * np.sqrt(df / (df - 2)), df)  # birim varyanslı t
     zq = np.asarray(params["z"])
     table = ndtr((_CDF_GRID[:, None] - zq[None, :]) / params["h"]).mean(axis=1)
     return np.interp(z, _CDF_GRID, table, left=0.0, right=1.0)
@@ -148,7 +186,7 @@ def score_pmf(params: dict, mu) -> tuple[np.ndarray, np.ndarray]:
     (k, p): for each prediction (rows) the integer outcomes k and their
     probabilities p, rows summing to 1.
     """
-    mu = np.atleast_1d(np.asarray(mu, dtype=float))
+    mu = center(params, mu)
     sig = sigma_for(params, mu)
     r = int(np.ceil(_SUPPORT_SIGMAS * sig.max()))
     k = np.round(mu)[:, None] + np.arange(-r, r + 1)[None, :]
@@ -221,6 +259,35 @@ def ladder_eval(params: dict, y, mu) -> dict:
     }
 
 
+def crps(params: dict, y, mu) -> float:
+    """
+    Mean continuous ranked probability score over integer outcomes (points;
+    lower is better). Unlike the ±8 ladder it scores the whole distribution,
+    tails included, so it decides between candidate distributions.
+    """
+    y = np.asarray(y, dtype=float)
+    k, p = score_pmf(params, mu)
+    cdf = np.cumsum(p, axis=1)
+    return float(np.mean(np.sum((cdf - (k >= y[:, None])) ** 2, axis=1)))
+
+
+def band_table(params: dict, y, mu) -> list[dict]:
+    """Predicted vs observed share of each winning-margin band (both sides)."""
+    y = np.asarray(y, dtype=float)
+    rows = []
+    for side, sign in (("home", 1), ("away", -1)):
+        for lo, hi in MARGIN_BANDS:
+            a, b = (lo, hi) if sign == 1 else ((None if hi is None else -hi), -lo)
+            obs = np.ones(len(y), dtype=bool)
+            if a is not None:
+                obs &= y >= a
+            if b is not None:
+                obs &= y <= b
+            rows.append({"side": side, "lo": lo, "hi": hi, "obs": float(obs.mean()),
+                         "pred": float(prob_between(params, mu, a, b).mean())})
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Daily prediction output (05_predict_today.py)
 # ---------------------------------------------------------------------------
@@ -254,8 +321,8 @@ def game_lines(dists: dict, pred_margin: float | None, pred_total: float | None)
                     p = prob_between(d, pred_margin, None if hi is None else -hi, -lo)[0]
                 bands.append({"side": side, "lo": lo, "hi": hi, "p": _round(p)})
         out["margin"] = {
-            "pred": _round(pred_margin, 2),
-            "sigma": _round(sigma_for(d, pred_margin)[0], 2),
+            "pred": _round(center(d, pred_margin)[0], 2),
+            "sigma": _round(sigma_for(d, center(d, pred_margin))[0], 2),
             "fair_line": line0,
             "p_home_win": _round(prob_over(d, pred_margin, 0.0)[0]),
             "ladder": [{"line": float(l), "p_over": _round(p)} for l, p in zip(lines, p_over)],
@@ -267,8 +334,8 @@ def game_lines(dists: dict, pred_margin: float | None, pred_total: float | None)
         lines = line0 + np.asarray(LADDER_OFFSETS, dtype=float)
         p_over = prob_over(d, np.full(len(lines), pred_total), lines)
         out["total"] = {
-            "pred": _round(pred_total, 2),
-            "sigma": _round(sigma_for(d, pred_total)[0], 2),
+            "pred": _round(center(d, pred_total)[0], 2),
+            "sigma": _round(sigma_for(d, center(d, pred_total))[0], 2),
             "fair_line": line0,
             "ladder": [{"line": float(l), "p_over": _round(p)} for l, p in zip(lines, p_over)],
         }

@@ -78,6 +78,19 @@ LEGACY_TO_CURRENT: dict[str, str] = {
 
 FINAL_STATUSES = {"STATUS_FINAL", "STATUS_FINAL_OT"}
 
+# Line sources, best first (lower-case names). Real sportsbooks come first;
+# "consensus" (a market average) is the fallback. By season this gives
+# 2012-13 consensus, 2013-17 5Dimes, 2017-19 Caesars, 2019-24 DraftKings,
+# 2024-25 ESPN BET, then DraftKings again.
+PROVIDER_PREFERENCE = [
+    "draftkings", "espn bet", "caesars", "5dimes.eu", "westgate", "mgm", "wynn",
+    "cg technology", "betonline.ag", "bovada.lv", "sportsbetting.ag", "sportsbook.com",
+    "betnow.eu", "unibet", "sugarhouse", "betfairsportsbook", "pointsbet",
+    "holland casino", "titanbets", "betradar", "consensus",
+]
+# Projection sites and opening lines are not closing market prices.
+EXCLUDED_PROVIDERS = {"numberfire", "teamrankings", "accuscore", "fantasy911.com", "opening"}
+
 COLUMNS = [
     "game_id", "game_date", "home_team_abbr", "away_team_abbr", "espn_event_id",
     "spread_home", "market_margin", "total",
@@ -217,19 +230,30 @@ def parse_odds_entry(entry: dict | None) -> dict | None:
     }
 
 
-def pick_entry(entries: list | None) -> dict | None:
+def provider_rank(name: str) -> int | None:
     """
-    Prefer DraftKings, otherwise the highest-priority provider with a line.
-    In-game feeds ("ESPN Bet - Live Odds") are not pre-game lines and are skipped.
+    Preference of a line source (lower is better); None = never use it.
+    The core API lists dozens of sources per game, all with priority 0, among
+    them projection sites and opening / in-game lines, so the order is explicit.
     """
-    entries = [e for e in (entries or [])
-               if parse_odds_entry(e) and "live" not in (_get(e, "provider", "name") or "").lower()]
-    if not entries:
+    n = (name or "").strip().lower()
+    if not n or "live" in n or n in EXCLUDED_PROVIDERS:
         return None
-    for e in entries:
-        if (_get(e, "provider", "name") or "").lower() == "draftkings":
-            return e
-    return min(entries, key=lambda e: _get(e, "provider", "priority") or 99)
+    if n.startswith("caesar"):          # Caesars, Caesar's, Caesars Sportsbook (state)
+        return PROVIDER_PREFERENCE.index("caesars")
+    if n in PROVIDER_PREFERENCE:
+        return PROVIDER_PREFERENCE.index(n)
+    return len(PROVIDER_PREFERENCE)     # unknown source: after every listed one
+
+
+def pick_entry(entries: list | None) -> dict | None:
+    """Best-ranked source (provider_rank) that offers a line."""
+    ranked = []
+    for i, e in enumerate(entries or []):
+        rank = provider_rank(_get(e, "provider", "name"))
+        if rank is not None and parse_odds_entry(e):
+            ranked.append((rank, i, e))
+    return min(ranked, key=lambda t: t[:2])[2] if ranked else None
 
 
 def parse_scoreboard(data: dict) -> list[dict]:
@@ -390,9 +414,13 @@ def _replace(src: Path, dst: Path) -> None:
             time.sleep(0.1)
 
 
-def upsert_lines(rows: list[dict], path: Path = LINES_PATH) -> pd.DataFrame:
-    """Insert/replace rows by game_id; returns the stored table."""
-    if not rows:
+def upsert_lines(rows: list[dict], path: Path = LINES_PATH,
+                 remove_ids: set[str] | frozenset = frozenset()) -> pd.DataFrame:
+    """
+    Insert/replace rows by game_id and drop `remove_ids` (games that turned
+    out to have no usable line); returns the stored table.
+    """
+    if not rows and not remove_ids:
         return load_market_lines(path)
     new = pd.DataFrame(rows).reindex(columns=COLUMNS)
     new["game_id"] = new["game_id"].astype(str)
@@ -402,8 +430,12 @@ def upsert_lines(rows: list[dict], path: Path = LINES_PATH) -> pd.DataFrame:
         new[c] = pd.to_numeric(new[c], errors="coerce").astype("float64")
     with _file_lock(path):
         existing = load_market_lines(path)
-        keep = existing[~existing["game_id"].isin(new["game_id"])]
-        out = pd.concat([keep, new], ignore_index=True) if len(keep) else new
+        drop = set(new["game_id"]) | set(remove_ids)
+        keep = existing[~existing["game_id"].isin(drop)]
+        if new.empty and len(keep) == len(existing):
+            return existing                      # nothing to remove, no rewrite
+        parts = [p for p in (keep, new) if len(p)]
+        out = pd.concat(parts, ignore_index=True) if parts else new
         out["game_date"] = pd.to_datetime(out["game_date"])
         out = out.sort_values(["game_date", "game_id"]).reset_index(drop=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -464,8 +496,11 @@ def master_index(master: pd.DataFrame) -> dict[tuple, str]:
 
 
 def backfill_day(day: date, index: dict[tuple, str],
-                 cache_dir: Path = ESPN_CACHE) -> tuple[list[dict], int, int]:
-    """Lines of one finished day. Returns (rows, matched games, games without a line)."""
+                 cache_dir: Path = ESPN_CACHE) -> tuple[list[dict], int, list[str]]:
+    """
+    Lines of one finished day.
+    Returns (rows, number of matched games, game_ids without a usable line).
+    """
     games = []
     for ev in parse_scoreboard(fetch_scoreboard(day, cache=True, cache_dir=cache_dir)):
         gid = index.get((day, canon_abbr(ev["home_team_abbr"]), canon_abbr(ev["away_team_abbr"])))
@@ -477,7 +512,7 @@ def backfill_day(day: date, index: dict[tuple, str],
     with ThreadPoolExecutor(max_workers=PARALLEL_REQUESTS) as pool:
         core = dict(zip(need_core, pool.map(lambda eid: fetch_core_odds(eid, cache_dir), need_core)))
 
-    rows, matched, missing = [], len(games), 0
+    rows, matched, missing = [], len(games), []
     for gid, ev in games:
         odds, source = ev["odds"], "scoreboard"
         if odds is None:
@@ -487,7 +522,7 @@ def backfill_day(day: date, index: dict[tuple, str],
             odds = parse_odds_entry(pick_entry(fetch_pickcenter(ev["event_id"], cache_dir)))
             source = "summary"
         if odds is None:
-            missing += 1
+            missing.append(gid)
             continue
         rows.append(_row(gid, day, ev, odds, source))
     return rows, matched, missing
@@ -512,12 +547,13 @@ def backfill(seasons: list[str], master: pd.DataFrame, today: date,
             except RuntimeError as e:
                 print(f"  [ATLANDI] {day}: {e} — tekrar çalıştırınca kaldığı yerden devam eder")
                 continue
-            table = upsert_lines(rows, path)
+            # A game without a usable line drops any row an older run stored
+            table = upsert_lines(rows, path, remove_ids=set(missing))
             n_rows += len(rows)
-            n_missing += missing
+            n_missing += len(missing)
             n_matched += matched
             print(f"  [{i:>3}/{len(days)}] {day}: {matched} maç eşleşti, {len(rows)} oran"
-                  + (f", {missing} oransız" if missing else ""))
+                  + (f", {len(missing)} oransız" if missing else ""))
 
         print(f"{season} bitti: {n_rows} oran / {len(games)} maç "
               f"(eşleşmeyen {len(games) - n_matched}, oransız {n_missing})")

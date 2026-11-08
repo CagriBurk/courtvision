@@ -18,6 +18,7 @@ from espn_odds import (
     parse_odds_entry,
     parse_scoreboard,
     pick_entry,
+    provider_rank,
     update_today_lines,
     upsert_lines,
 )
@@ -167,6 +168,24 @@ def test_pick_entry_prefers_draftkings():
     assert pick_entry([other])["spread"] == -9.0
 
 
+def line(provider, spread):
+    return {"provider": {"name": provider, "priority": 0}, "spread": spread, "overUnder": 220.0}
+
+
+def test_pick_entry_skips_projections_and_opening_lines():
+    # The core API lists projection sites first, all with priority 0
+    items = [line("teamrankings", -1.0), line("numberfire", -2.0), line("Opening", -3.0),
+             line("consensus", -4.0), line("Caesars Sportsbook (New Jersey)", -5.0),
+             line("Caesars Sportsbook (New Jersey) - Live Odds", -9.0), line("5Dimes.eu", -6.0)]
+    assert pick_entry(items)["spread"] == -5.0                  # Caesars beats 5Dimes
+    assert pick_entry(items[:4])["spread"] == -4.0              # consensus as fallback
+    assert pick_entry(items[:3]) is None                        # only projections → no line
+    assert pick_entry([line("SomeNewBook", -7.0), line("consensus", -4.0)])["spread"] == -4.0
+    assert pick_entry([line("SomeNewBook", -7.0), line("accuscore", -8.0)])["spread"] == -7.0
+    assert provider_rank("Caesar's") == provider_rank("Caesars")
+    assert provider_rank("DraftKings - Live Odds") is None
+
+
 def test_parse_scoreboard():
     data = {"events": [
         event("1", "MIN", "UTAH", scoreboard_entry(-11.5, 223.5, "-700", "+500")),
@@ -189,6 +208,11 @@ def test_upsert_replaces_by_game_id(tmp_path):
     assert table.set_index("game_id").loc["A", "spread_home"] == 8.5
     assert list(load_market_lines(path).columns) == espn_odds.COLUMNS
     assert upsert_lines([], path).shape[0] == 2
+    # A game that turned out to have no usable line is removed
+    table = upsert_lines([], path, remove_ids={"B", "never-stored"})
+    assert list(table["game_id"]) == ["A"] and len(load_market_lines(path)) == 1
+    table = upsert_lines([dict(base, game_id="C")], path, remove_ids={"A"})
+    assert list(table["game_id"]) == ["C"]
 
 
 def test_concurrent_upserts_keep_every_row(tmp_path):

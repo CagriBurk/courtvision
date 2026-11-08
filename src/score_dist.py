@@ -219,3 +219,60 @@ def ladder_eval(params: dict, y, mu) -> dict:
         "by_offset": by_offset,
         "n_games": int(len(y)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Daily prediction output (05_predict_today.py)
+# ---------------------------------------------------------------------------
+def _round(v, nd=4):
+    return round(float(v), nd)
+
+
+def game_lines(dists: dict, pred_margin: float | None, pred_total: float | None) -> dict | None:
+    """
+    Everything the app shows for one game's handicap and total markets.
+
+    margin.ladder[i]: line on the home margin, p_over = P(home margin > line).
+      line  6.5 → "Ev -6.5" wins with p_over, "Dep +6.5" with 1 - p_over
+      line -4.5 → "Ev +4.5" wins with p_over, "Dep -4.5" with 1 - p_over
+    margin.bands: winning-margin bands for each side (MARGIN_BANDS).
+    total.ladder[i]: p_over = P(total > line).
+    Fair odds are 1 / p; the app computes them.
+    """
+    out = {}
+    if pred_margin is not None and "margin" in dists:
+        d = dists["margin"]
+        line0 = float(fair_line(d, pred_margin)[0])
+        lines = line0 + np.asarray(LADDER_OFFSETS, dtype=float)
+        p_over = prob_over(d, np.full(len(lines), pred_margin), lines)
+        bands = []
+        for side, sign in (("home", 1), ("away", -1)):
+            for lo, hi in MARGIN_BANDS:
+                if sign == 1:
+                    p = prob_between(d, pred_margin, lo, hi)[0]
+                else:
+                    p = prob_between(d, pred_margin, None if hi is None else -hi, -lo)[0]
+                bands.append({"side": side, "lo": lo, "hi": hi, "p": _round(p)})
+        out["margin"] = {
+            "pred": _round(pred_margin, 2),
+            "sigma": _round(sigma_for(d, pred_margin)[0], 2),
+            "fair_line": line0,
+            "p_home_win": _round(prob_over(d, pred_margin, 0.0)[0]),
+            "ladder": [{"line": float(l), "p_over": _round(p)} for l, p in zip(lines, p_over)],
+            "bands": bands,
+        }
+    if pred_total is not None and "total" in dists:
+        d = dists["total"]
+        line0 = float(fair_line(d, pred_total)[0])
+        lines = line0 + np.asarray(LADDER_OFFSETS, dtype=float)
+        p_over = prob_over(d, np.full(len(lines), pred_total), lines)
+        out["total"] = {
+            "pred": _round(pred_total, 2),
+            "sigma": _round(sigma_for(d, pred_total)[0], 2),
+            "fair_line": line0,
+            "ladder": [{"line": float(l), "p_over": _round(p)} for l, p in zip(lines, p_over)],
+        }
+    if "margin" in out and "total" in out:
+        m, t = out["margin"]["pred"], out["total"]["pred"]
+        out["projected"] = {"home": round((t + m) / 2, 1), "away": round((t - m) / 2, 1)}
+    return out or None

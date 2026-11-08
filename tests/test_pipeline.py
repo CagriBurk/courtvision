@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pandas as pd
 
 # Add src to Python path
@@ -277,3 +278,46 @@ def test_score_targets_are_correct_and_never_features():
     }]
     live = predict_today.compute_live_features(master, games, g["game_date"].date())
     assert live.loc[g["game_id"], ["target_margin", "target_total"]].isna().all()
+
+
+def test_predict_games_adds_handicap_and_total():
+    import json as _json
+    import xgboost as xgb
+
+    master = make_master()
+    feats, _ = build_feature_matrix(master)
+    feat_cols = [c for c in feats.columns if c not in META_COLS]
+    X, small = feats[feat_cols].astype(float), {"n_estimators": 10, "max_depth": 2}
+    clf = xgb.XGBClassifier(**small).fit(X, feats["target"])
+    reg = {t: xgb.XGBRegressor(**small).fit(X, feats[f"target_{t}"]) for t in ("margin", "total")}
+    dists = {
+        "margin": {"task": "margin", "shape": "normal", "sigma": {"kind": "const", "value": 12.0}, "no_tie": True},
+        "total": {"task": "total", "shape": "normal", "sigma": {"kind": "const", "value": 18.0}, "no_tie": False},
+    }
+
+    g = master.iloc[-1]
+    games = [{
+        "game_id": g["game_id"],
+        "home_team_id": int(g["team_id_home"]), "away_team_id": int(g["team_id_away"]),
+        "home_team_abbr": g["team_abbreviation_home"], "away_team_abbr": g["team_abbreviation_away"],
+        "home_team_name": g["team_name_home"], "away_team_name": g["team_name_away"],
+    }]
+    live = predict_today.compute_live_features(master, games, g["game_date"].date())
+    day = g["game_date"].date()
+
+    # Without the new models: unchanged behaviour
+    plain = predict_today.predict_games(games, live, clf, feat_cols, day)[0]
+    assert plain["lines"] is None and plain["win_source"] == "classifier"
+
+    p = predict_today.predict_games(games, live, clf, feat_cols, day, None, reg, dists, "margin")[0]
+    lines = _json.loads(p["lines"])
+    assert p["win_source"] == "margin"
+    assert p["prob_home"] == pytest.approx(lines["margin"]["p_home_win"])
+    assert p["prob_home"] + p["prob_away"] == pytest.approx(1)
+    assert len(lines["margin"]["ladder"]) == 9 and len(lines["margin"]["bands"]) == 12
+    assert lines["total"]["fair_line"] % 1 == 0.5
+    proj = lines["projected"]
+    assert proj["home"] - proj["away"] == pytest.approx(p["pred_margin"], abs=0.11)
+    assert proj["home"] + proj["away"] == pytest.approx(p["pred_total"], abs=0.11)
+    # The report helper reads the same JSON
+    assert "Toplam" in predict_today._lines_summary(p, lines)

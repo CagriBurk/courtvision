@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from feature_engineering import build_feature_matrix
-from modeling import apply_calibration, explain_prediction
+from modeling import TASKS, apply_calibration, explain_prediction
 from nba_data_client import (
     NBA_API_AVAILABLE,
     fetch_player_season,
@@ -39,6 +39,7 @@ from nba_data_client import (
 )
 from player_stats import get_injuries, match_player_ids
 from prediction_tracker import save_predictions, fill_results
+from score_dist import game_lines
 from season import current_season, nba_today, season_id, season_start_year
 
 # ---------------------------------------------------------------------------
@@ -205,10 +206,51 @@ def _int(v):
     return None if pd.isna(v) else int(v)
 
 
+def _lines_summary(g: dict, lines: dict) -> str:
+    """'Skor 109-117 | Handikap: BOS -8.5 | Toplam 226.5' style one-liner."""
+    parts = []
+    if "projected" in lines:
+        parts.append(f"Skor {lines['projected']['home']:.0f}-{lines['projected']['away']:.0f}")
+    if "margin" in lines:
+        fl = lines["margin"]["fair_line"]
+        fav = g["home_team_abbr"] if fl > 0 else g["away_team_abbr"]
+        parts.append(f"Handikap: {fav} -{abs(fl):.1f}")
+    if "total" in lines:
+        parts.append(f"Toplam {lines['total']['fair_line']:.1f}")
+    return " | ".join(parts)
+
+
+def load_line_models() -> tuple[dict, dict, str]:
+    """
+    Margin / total regressors and their error distributions (from 03 and 04),
+    plus which model supplies the home win probability (metrics.json).
+    Missing files simply switch the handicap / total output off.
+    """
+    dist_path = MODELS_DIR / "distribution.json"
+    dists = json.loads(dist_path.read_text(encoding="utf-8")) if dist_path.exists() else {}
+    models = {}
+    for task in ("margin", "total"):
+        path = MODELS_DIR / TASKS[task]["model_file"]
+        if path.exists() and task in dists:
+            with open(path, "rb") as f:
+                models[task] = pickle.load(f)
+            models[task].set_params(device="cpu")
+
+    metrics_path = MODELS_DIR / "metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
+    win_source = metrics.get("win_source", "classifier")
+    if win_source == "margin" and "margin" not in models:
+        win_source = "classifier"
+    return models, dists, win_source
+
+
 def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
                   feature_columns: list, target_date: date,
-                  calibration: dict | None = None) -> list[dict]:
+                  calibration: dict | None = None,
+                  line_models: dict | None = None, dists: dict | None = None,
+                  win_source: str = "classifier") -> list[dict]:
     predictions = []
+    line_models = line_models or {}
 
     for g in games:
         gid = str(g["game_id"])
@@ -222,6 +264,14 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
         prob_home = float(apply_calibration(calibration, raw_prob))
         # Modelin kendi gerekçesi (SHAP katkıları, okunur gruplara toplanmış)
         model_factors = explain_prediction(model, X_live, calibration)
+
+        # Handikap / toplam: fark ve toplam tahmini → barem olasılıkları
+        reg_pred = {t: float(m.predict(X_live)[0]) for t, m in line_models.items()}
+        lines = game_lines(dists or {}, reg_pred.get("margin"), reg_pred.get("total")) if reg_pred else None
+        source = "classifier"
+        if win_source == "margin" and lines and "margin" in lines:
+            prob_home = lines["margin"]["p_home_win"]
+            source = "margin"
         prob_away = 1.0 - prob_home
         winner    = "HOME" if prob_home > 0.5 else "AWAY"
         conf      = "YÜKSEK" if max(prob_home, prob_away) >= 0.65 else \
@@ -235,6 +285,11 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "predicted_winner": winner,
             "confidence":       conf,
             "model_factors":    json.dumps(model_factors, ensure_ascii=False),
+            "win_source":       source,
+            # Handikap / toplam (modeller yoksa None)
+            "pred_margin":      reg_pred.get("margin"),
+            "pred_total":       reg_pred.get("total"),
+            "lines":            json.dumps(lines) if lines else None,
             # Form özeti
             "home_form_L5":     _num(row.get("home_won_L5")),
             "home_form_L10":    _num(row.get("home_won_L10")),
@@ -265,7 +320,8 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "home_n_missing_rotation":  _int(row.get("home_n_missing_rotation")),
             "away_n_missing_rotation":  _int(row.get("away_n_missing_rotation")),
         }
-        print(f"  {g['home_team_abbr']} %{prob_home * 100:.1f} | {g['away_team_abbr']} %{prob_away * 100:.1f} [{conf}]")
+        print(f"  {g['home_team_abbr']} %{prob_home * 100:.1f} | {g['away_team_abbr']} %{prob_away * 100:.1f} [{conf}]"
+              + (f"  | {_lines_summary(g, lines)}" if lines else ""))
         predictions.append(result)
 
     return predictions
@@ -293,6 +349,8 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
 
         home_form_pct = f"{p['home_form_L5']:.0%}" if p["home_form_L5"] is not None else "—"
         away_form_pct = f"{p['away_form_L5']:.0%}" if p["away_form_L5"] is not None else "—"
+        lines_html = (f'<div class="h2h">{_lines_summary(p, json.loads(p["lines"]))}</div>'
+                      if p.get("lines") else "")
 
         cards += f"""
 <div class="card">
@@ -320,6 +378,7 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
     H2H ({p['h2h_games']} maç): Ev sahibi win rate %{p['h2h_home_wr']:.1%} |
     Avg score diff: {p['h2h_pts_diff']:+.1f}
   </div>
+  {lines_html}
 </div>"""
 
     conf_colors = {"YÜKSEK": "#27ae60", "ORTA": "#e67e22", "DÜŞÜK": "#e74c3c"}
@@ -413,7 +472,12 @@ def main(target_date: date | None = None):
     # 04_evaluate_model.py writes this only if it improved the holdout log-loss
     cal_path = MODELS_DIR / "calibration.json"
     calibration = json.loads(cal_path.read_text(encoding="utf-8")) if cal_path.exists() else None
-    print(f"Kalibrasyon: {'açık (Platt)' if calibration else 'kapalı'}\n")
+    print(f"Kalibrasyon: {'açık (Platt)' if calibration else 'kapalı'}")
+
+    # Handikap / toplam modelleri (03 --task margin/total + 04 sonrası)
+    line_models, dists, win_source = load_line_models()
+    print(f"Handikap/toplam: {', '.join(line_models) if line_models else 'model yok'} | "
+          f"Kazanan olasılığı: {'fark modeli' if win_source == 'margin' else 'sınıflandırıcı'}\n")
 
     # Master tablo + güncel sezon
     master = _normalize_ids(pd.read_parquet(PROC_DIR / "master_games.parquet"))
@@ -456,7 +520,8 @@ def main(target_date: date | None = None):
     live_feats = compute_live_features(master, games, target_date, player_games, absent_override)
 
     print("\nTahminler hesaplanıyor...")
-    predictions = predict_games(games, live_feats, model, feature_columns, target_date, calibration)
+    predictions = predict_games(games, live_feats, model, feature_columns, target_date, calibration,
+                                line_models, dists, win_source)
     for p in predictions:
         p["home_form_seq"] = recent_form(master, str(p["home_team_id"]), target_date)
         p["away_form_seq"] = recent_form(master, str(p["away_team_id"]), target_date)

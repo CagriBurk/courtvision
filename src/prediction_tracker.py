@@ -13,8 +13,10 @@ Prediction log: data/predictions/predictions_log.parquet
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -24,6 +26,20 @@ PRED_LOG = PRED_DIR / "predictions_log.parquet"
 PRED_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIDENCE_WEIGHTS = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+SCORE_COLS = ["actual_home_pts", "actual_away_pts"]
+
+
+def _opt_float(v):
+    return None if v is None or pd.isna(v) else float(v)
+
+
+def _ensure_score_cols(log: pd.DataFrame) -> pd.DataFrame:
+    """Logs written before the handicap/total models have no score columns."""
+    for c in SCORE_COLS:
+        if c not in log.columns:
+            log[c] = np.nan
+        log[c] = log[c].astype(float)
+    return log
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +62,7 @@ def save_predictions(predictions: list[dict]) -> pd.DataFrame:
         conf = conf_tr_to_en.get(p.get("confidence", ""), p.get("confidence", "LOW"))
 
         prob_home = float(p.get("prob_home", 0.5))
+        lines = json.loads(p["lines"]) if p.get("lines") else {}
 
         rows.append(
             {
@@ -61,6 +78,14 @@ def save_predictions(predictions: list[dict]) -> pd.DataFrame:
                 "predicted_winner": "HOME" if prob_home >= 0.5 else "AWAY",
                 "actual_winner": None,
                 "correct": None,
+                # Handikap / toplam (modeller yoksa boş)
+                "pred_margin": _opt_float(p.get("pred_margin")),
+                "pred_total": _opt_float(p.get("pred_total")),
+                "fair_margin_line": _opt_float(lines.get("margin", {}).get("fair_line")),
+                "fair_total_line": _opt_float(lines.get("total", {}).get("fair_line")),
+                "lines_json": p.get("lines"),
+                "actual_home_pts": np.nan,
+                "actual_away_pts": np.nan,
             }
         )
 
@@ -93,10 +118,10 @@ def fill_results(master: pd.DataFrame | None = None) -> pd.DataFrame:
         print("[tracker] Kayıt dosyası bulunamadı.")
         return pd.DataFrame()
 
-    log = pd.read_parquet(PRED_LOG)
+    log = _ensure_score_cols(pd.read_parquet(PRED_LOG))
 
-    # Henüz doldurulmamış satırlar
-    unfilled = log[log["actual_winner"].isna()].copy()
+    # Kazananı ya da skoru henüz doldurulmamış satırlar
+    unfilled = log[log["actual_winner"].isna() | log["actual_home_pts"].isna()].copy()
     if unfilled.empty:
         print("[tracker] Doldurulacak kayıt yok.")
         return log
@@ -115,16 +140,18 @@ def fill_results(master: pd.DataFrame | None = None) -> pd.DataFrame:
     filled_count = 0
     for idx, row in unfilled.iterrows():
         match = master[master["game_id"] == row["game_id"]]
-        if match.empty:
+        if match.empty or pd.isna(match.iloc[0].get("target")):
             continue  # Sonuç henüz yok (maç oynanmamış)
+        m = match.iloc[0]
 
-        target = int(match.iloc[0]["target"])  # 1=ev kazandı, 0=deplasman
-        actual = "HOME" if target == 1 else "AWAY"
-        correct = actual == row["predicted_winner"]
-
-        log.at[idx, "actual_winner"] = actual
-        log.at[idx, "correct"] = correct
-        filled_count += 1
+        if pd.isna(row["actual_winner"]):
+            actual = "HOME" if int(m["target"]) == 1 else "AWAY"  # 1=ev kazandı
+            log.at[idx, "actual_winner"] = actual
+            log.at[idx, "correct"] = actual == row["predicted_winner"]
+            filled_count += 1
+        if pd.notna(m.get("pts_home")) and pd.notna(m.get("pts_away")):
+            log.at[idx, "actual_home_pts"] = float(m["pts_home"])
+            log.at[idx, "actual_away_pts"] = float(m["pts_away"])
 
     log.to_parquet(PRED_LOG, index=False)
     print(f"[tracker] {filled_count} maçın sonucu dolduruldu.")
@@ -218,8 +245,8 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
         print("[tracker] nba_api yüklü değil, fill_results_live atlandı.")
         return pd.DataFrame()
 
-    log = pd.read_parquet(PRED_LOG)
-    unfilled = log[log["actual_winner"].isna()].copy()
+    log = _ensure_score_cols(pd.read_parquet(PRED_LOG))
+    unfilled = log[log["actual_winner"].isna() | log["actual_home_pts"].isna()].copy()
     if unfilled.empty:
         return log
 
@@ -257,19 +284,33 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
         zip(home_rows["GAME_ID"].astype(str), home_rows["actual_winner_flag"])
     )
 
+    # GAME_ID → (ev sayısı, deplasman sayısı)
+    scores: dict[str, tuple[float, float]] = {}
+    if "PTS" in df.columns:
+        away_pts = dict(zip(df.loc[~df["MATCHUP_IS_HOME"], "GAME_ID"].astype(str),
+                            df.loc[~df["MATCHUP_IS_HOME"], "PTS"]))
+        for gid, pts in zip(home_rows["GAME_ID"].astype(str), home_rows["PTS"]):
+            if gid in away_pts and pd.notna(pts) and pd.notna(away_pts[gid]):
+                scores[gid] = (float(pts), float(away_pts[gid]))
+
     filled_count = 0
+    changed = False
     for idx, row in unfilled.iterrows():
         gid = str(row["game_id"])
         if gid not in game_results:
             continue
-        target = game_results[gid]  # 1=ev kazandı, 0=dep kazandı
-        actual = "HOME" if target == 1 else "AWAY"
-        correct = actual == row["predicted_winner"]
-        log.at[idx, "actual_winner"] = actual
-        log.at[idx, "correct"] = correct
-        filled_count += 1
+        if pd.isna(row["actual_winner"]):
+            target = game_results[gid]  # 1=ev kazandı, 0=dep kazandı
+            actual = "HOME" if target == 1 else "AWAY"
+            log.at[idx, "actual_winner"] = actual
+            log.at[idx, "correct"] = actual == row["predicted_winner"]
+            filled_count += 1
+            changed = True
+        if gid in scores:
+            log.at[idx, "actual_home_pts"], log.at[idx, "actual_away_pts"] = scores[gid]
+            changed = True
 
-    if filled_count > 0:
+    if changed:
         log.to_parquet(PRED_LOG, index=False)
         print(f"[tracker] fill_results_live: {filled_count} maç dolduruldu.")
     else:
@@ -321,6 +362,69 @@ def print_live_report() -> None:
     print("\n  Günlük:")
     for d, g in done.groupby("date"):
         print(f"    {d}: {int(g['correct'].sum())}/{len(g)}")
+
+    _print_line_report(_ensure_score_cols(log))
+
+
+def line_report(log: pd.DataFrame) -> dict:
+    """
+    Handicap / total accuracy of settled games: point error of the predicted
+    margin and total, and how often the priced ladder lines came in compared
+    with their probability (calibration in 10-point probability buckets).
+    """
+    log = _ensure_score_cols(log.copy())
+    has_score = log["actual_home_pts"].notna() & log["actual_away_pts"].notna()
+    actual = {
+        "margin": log["actual_home_pts"] - log["actual_away_pts"],
+        "total": log["actual_home_pts"] + log["actual_away_pts"],
+    }
+    out = {}
+    for task, col in (("margin", "pred_margin"), ("total", "pred_total")):
+        if col not in log.columns:
+            continue
+        rows = log[has_score & log[col].notna()]
+        if rows.empty:
+            continue
+        err = rows[col].astype(float) - actual[task][rows.index]
+        # Kayıtlı barem olasılıkları ↔ gerçekleşen
+        pairs = []
+        for i, js in rows["lines_json"].items():
+            lines = json.loads(js).get(task) if isinstance(js, str) else None
+            for rung in (lines or {}).get("ladder", []):
+                pairs.append((rung["p_over"], float(actual[task][i] > rung["line"])))
+        buckets = []
+        if pairs:
+            p, hit = np.array(pairs).T
+            b = np.minimum((p * 10).astype(int), 9)
+            for k in range(10):
+                m = b == k
+                if m.any():
+                    buckets.append({"bucket": k, "n": int(m.sum()),
+                                    "mean_pred": float(p[m].mean()), "frac_over": float(hit[m].mean())})
+        out[task] = {
+            "n": int(len(rows)),
+            "mae": float(err.abs().mean()),
+            "bias": float(err.mean()),
+            "within_5": float((err.abs() <= 5).mean()),
+            "within_10": float((err.abs() <= 10).mean()),
+            "ladder_calibration": buckets,
+        }
+    return out
+
+
+def _print_line_report(log: pd.DataFrame) -> None:
+    rep = line_report(log)
+    if not rep:
+        return
+    labels = {"margin": "Fark (handikap)", "total": "Toplam sayı"}
+    for task, r in rep.items():
+        print(f"\n  {labels[task]} — {r['n']} maç:")
+        print(f"    MAE {r['mae']:.2f} sayı | sapma {r['bias']:+.2f} (+ = fazla tahmin) | "
+              f"±5 içinde %{r['within_5'] * 100:.0f} | ±10 içinde %{r['within_10'] * 100:.0f}")
+        if r["ladder_calibration"]:
+            print("    Barem olasılığı → gerçekleşen üst oranı (barem sayısı):")
+            for b in r["ladder_calibration"]:
+                print(f"      %{b['mean_pred'] * 100:4.0f} → %{b['frac_over'] * 100:4.0f}  ({b['n']})")
 
 
 def _empty_stats() -> dict:

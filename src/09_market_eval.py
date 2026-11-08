@@ -21,9 +21,11 @@ Predictions are cached (training takes a few minutes); the analysis reruns
 from the cache in seconds.
 
 Input : data/processed/features.parquet, data/processed/market_lines.parquet,
-        models/train_meta*.json (parameters only; no model file is read or written)
+        models/train_meta*.json (parameters only; no model file is read)
 Output: data/processed/market_eval_preds.parquet (prediction cache)
         reports/market_eval.json
+        models/market_distribution.json  (closing-line error distribution and
+            the model's blend weight, read by 05; not with --no-availability)
 
 Caveat: in training, player-absence features come from the game's own box
 score (who got no minutes), while live they come from the injury report.
@@ -49,7 +51,9 @@ from sklearn.model_selection import TimeSeriesSplit
 from espn_odds import load_market_lines
 from market_eval import (
     BREAK_EVEN_110,
+    blend_weight_for,
     early_season_mask,
+    fit_market_distribution,
     line_section,
     prob_section,
 )
@@ -269,6 +273,36 @@ def main(refresh: bool, no_availability: bool) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, default=float), encoding="utf-8")
     print(f"\nRapor → {report_path}")
+
+    if not no_availability:   # the app's distribution comes from the real model only
+        write_market_distribution(preds, lines, report)
+
+
+def write_market_distribution(preds: pd.DataFrame, lines: pd.DataFrame, report: dict) -> None:
+    """models/market_distribution.json: closing-line error distribution + blend weights (read by 05)."""
+    master = pd.read_parquet(PROC_DIR / "master_games.parquet",
+                             columns=["game_id", "season_id", "pts_home", "pts_away"])
+    master["game_id"] = master["game_id"].astype(str)
+    games = master.merge(lines[["game_id", "market_margin", "total"]], on="game_id")
+    games = games.rename(columns={"total": "market_total"})
+    games["y_margin"] = games["pts_home"] - games["pts_away"]
+    games["y_total"] = games["pts_home"] + games["pts_away"]
+
+    holdout_season = str(preds.loc[preds["set"] == "holdout", "season_id"].iloc[0])
+    dist = fit_market_distribution(games, holdout_season)
+    dist["blend"] = {"margin": blend_weight_for(report["margin_mapped"]),
+                     "total": blend_weight_for(report["total"])}
+
+    path = MODELS_DIR / "market_distribution.json"
+    path.write_text(json.dumps(dist, indent=2, default=float), encoding="utf-8")
+    print(f"\nPiyasa dağılımı → {path}")
+    for task in ("margin", "total"):
+        p, b = dist[task], dist["blend"][task]
+        sig = p["sigma"]
+        sig_txt = f"{sig['value']:.2f}" if sig["kind"] == "const" else f"{sig['a']:.2f}{sig['b']:+.3f}·x"
+        crps_txt = ", ".join(f"{k} {v:.3f}" for k, v in p["selection"]["crps"].items())
+        print(f"  {task}: şekil {p['shape']} (CRPS {crps_txt}), sigma {sig_txt}, "
+              f"model payı w = {b['w']:.2f}")
 
 
 if __name__ == "__main__":

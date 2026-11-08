@@ -148,3 +148,64 @@ def early_season_mask(dates: pd.Series) -> np.ndarray:
     """October-November games: teams have played < ~15 games."""
     month = pd.to_datetime(dates).dt.month
     return month.isin([10, 11]).to_numpy()
+
+
+# ---------------------------------------------------------------------------
+# Market-centred score distribution (used by 05 when a line exists)
+# ---------------------------------------------------------------------------
+MARKET_FIT_SEASONS = 3      # seasons before the holdout the error shape is learned on
+MAX_BLEND_W = 0.5
+
+
+def blend_weight_for(section: dict) -> dict:
+    """
+    How far the app moves from the market towards the model: the OOF weight,
+    but only when both the OOF and the holdout weight are clearly above zero
+    (2 standard errors); otherwise 0 — the market alone.
+    """
+    oof = (section.get("oof") or {}).get("weight") or {}
+    hold = (section.get("holdout") or {}).get("weight") or {}
+
+    def significant(w):
+        return bool(w) and np.isfinite(w.get("w", np.nan)) and w["w"] - 2 * w["se"] > 0
+
+    use = significant(oof) and significant(hold)
+    return {
+        "w": float(min(oof["w"], MAX_BLEND_W)) if use else 0.0,
+        "oof_w": oof.get("w"), "oof_se": oof.get("se"),
+        "holdout_w": hold.get("w"), "holdout_se": hold.get("se"),
+        "rule": "OOF ve holdout w > 2·se ise OOF w (en çok 0.5), değilse 0",
+    }
+
+
+def fit_market_distribution(games: pd.DataFrame, holdout_season: str) -> dict:
+    """
+    Error distribution of the closing line: resid = actual − market, learned
+    like the model's (score_dist.fit_distribution). The shape (normal / t /
+    kde) is chosen by CRPS on the holdout season; the saved parameters are
+    refit on the training seasons plus the holdout.
+
+    games: season_id, y_margin, market_margin, y_total, market_total
+    """
+    from score_dist import crps, fit_distribution
+
+    seasons = sorted(s for s in games["season_id"].astype(str).unique() if s < holdout_season)
+    train_ids = set(seasons[-MARKET_FIT_SEASONS:])
+    sid = games["season_id"].astype(str)
+    out = {"holdout_season": holdout_season, "fit_seasons": sorted(train_ids)}
+
+    for task, y_col, m_col in (("margin", "y_margin", "market_margin"), ("total", "y_total", "market_total")):
+        g = games.dropna(subset=[y_col, m_col])
+        tr, ho = g[sid.loc[g.index].isin(train_ids)], g[sid.loc[g.index] == holdout_season]
+        base = fit_distribution(task, tr[y_col] - tr[m_col], tr[m_col])
+        scores = {}
+        for shape in ("normal", "t", "kde"):
+            scores[shape] = crps({**base, "shape": shape}, ho[y_col].to_numpy(), ho[m_col].to_numpy()) \
+                if len(ho) else float("nan")
+        best = min(scores, key=lambda s: scores[s] if np.isfinite(scores[s]) else np.inf)
+        both = pd.concat([tr, ho])
+        params = fit_distribution(task, both[y_col] - both[m_col], both[m_col])
+        params["shape"] = best
+        params["selection"] = {"crps": scores, "n_train": int(len(tr)), "n_holdout": int(len(ho))}
+        out[task] = params
+    return out

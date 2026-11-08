@@ -12,7 +12,9 @@ from market_eval import (
     apply_prob_blend,
     ats_table,
     blend_weight,
+    blend_weight_for,
     early_season_mask,
+    fit_market_distribution,
     fit_prob_blend,
     line_section,
     log_loss,
@@ -87,6 +89,37 @@ def test_line_section_out_of_sample_blend():
     assert sec["n"] == 5000
     assert sec["blend_out_of_sample"]["mae"] <= sec["market"]["mae"] + 0.02
     assert "blend_out_of_sample" not in line_section(y, m, p)
+
+
+def test_blend_weight_needs_oof_and_holdout_evidence():
+    def sec(oof_w, oof_se, h_w, h_se):
+        return {"oof": {"weight": {"w": oof_w, "se": oof_se}},
+                "holdout": {"weight": {"w": h_w, "se": h_se}}}
+
+    assert blend_weight_for(sec(0.35, 0.03, 0.32, 0.11))["w"] == pytest.approx(0.35)
+    assert blend_weight_for(sec(0.35, 0.03, 0.15, 0.11))["w"] == 0      # holdout not significant
+    assert blend_weight_for(sec(0.05, 0.03, 0.40, 0.10))["w"] == 0      # OOF not significant
+    assert blend_weight_for(sec(0.90, 0.05, 0.80, 0.10))["w"] == 0.5    # capped
+    assert blend_weight_for({})["w"] == 0
+
+
+def test_fit_market_distribution_learns_line_error():
+    rng = np.random.default_rng(3)
+    rows = []
+    for season in ("22021", "22022", "22023", "22024", "22025"):
+        m = rng.normal(0, 7, 1500)
+        t = rng.normal(225, 8, 1500)
+        rows.append(pd.DataFrame({
+            "season_id": season, "market_margin": m, "market_total": t,
+            "y_margin": m + rng.normal(0, 13, 1500), "y_total": t + rng.normal(0, 18, 1500),
+        }))
+    dist = fit_market_distribution(pd.concat(rows, ignore_index=True), "22025")
+    assert dist["fit_seasons"] == ["22022", "22023", "22024"]
+    assert dist["margin"]["sigma"]["value"] == pytest.approx(13, rel=0.05)
+    assert dist["total"]["sigma"]["value"] == pytest.approx(18, rel=0.05)
+    assert dist["margin"]["shape"] in ("normal", "t", "kde") and dist["margin"]["no_tie"]
+    assert dist["margin"]["mean_map"] is None
+    assert dist["margin"]["selection"]["n_holdout"] == 1500
 
 
 def test_early_season_mask():

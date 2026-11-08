@@ -27,14 +27,81 @@ META_COLS = [
 ]
 
 # Fixed XGBoost params (Optuna tunes the rest)
-BASE_PARAMS = {
-    "objective":    "binary:logistic",
-    "eval_metric":  "logloss",
+COMMON_PARAMS = {
     "tree_method":  "hist",
     "device":       "cuda",
     "random_state": 42,
     "n_jobs":       -1,
 }
+
+# What each model predicts and where its files live. "win" keeps the original
+# file names so the existing pipeline (05, API) is untouched.
+TASKS = {
+    "win": {
+        "label":        "Kazanan",
+        "target":       "target",
+        "kind":         "classifier",
+        "params":       {"objective": "binary:logistic", "eval_metric": "logloss"},
+        "cv_metric":    "log-loss",
+        "model_file":   "xgb_best.pkl",
+        "study_file":   "optuna_study.pkl",
+        "meta_file":    "train_meta.json",
+        "metrics_file": "metrics.json",
+    },
+    "margin": {
+        "label":        "Fark (ev - deplasman)",
+        "target":       "target_margin",
+        "kind":         "regressor",
+        "params":       {"objective": "reg:squarederror", "eval_metric": "rmse"},
+        "cv_metric":    "RMSE",
+        "model_file":   "xgb_margin.pkl",
+        "study_file":   "optuna_study_margin.pkl",
+        "meta_file":    "train_meta_margin.json",
+        "metrics_file": "metrics_margin.json",
+    },
+    "total": {
+        "label":        "Toplam sayı",
+        "target":       "target_total",
+        "kind":         "regressor",
+        "params":       {"objective": "reg:squarederror", "eval_metric": "rmse"},
+        "cv_metric":    "RMSE",
+        "model_file":   "xgb_total.pkl",
+        "study_file":   "optuna_study_total.pkl",
+        "meta_file":    "train_meta_total.json",
+        "metrics_file": "metrics_total.json",
+    },
+}
+
+# Win-model params, kept under the old name for 04 / 07
+BASE_PARAMS = {**TASKS["win"]["params"], **COMMON_PARAMS}
+
+
+def task_params(task: str) -> dict:
+    """Fixed XGBoost params for a task (objective + hardware settings)."""
+    return {**TASKS[task]["params"], **COMMON_PARAMS}
+
+
+def make_model(task: str, params: dict):
+    """Untrained XGBoost model of the task's kind; `params` excludes fixed ones."""
+    import xgboost as xgb
+
+    cls = xgb.XGBClassifier if TASKS[task]["kind"] == "classifier" else xgb.XGBRegressor
+    return cls(**params, **task_params(task))
+
+
+def predict_task(task: str, model, X):
+    """Home win probability (win) or predicted points (margin / total)."""
+    if TASKS[task]["kind"] == "classifier":
+        return model.predict_proba(X)[:, 1]
+    return model.predict(X)
+
+
+def cv_loss(task: str, y_true, y_pred) -> float:
+    """Optuna objective, lower is better: log-loss or RMSE."""
+    if TASKS[task]["kind"] == "classifier":
+        return float(log_loss(y_true, y_pred))
+    diff = np.asarray(y_true, dtype=float) - np.asarray(y_pred, dtype=float)
+    return float(np.sqrt(np.mean(diff ** 2)))
 
 
 def load_feature_table() -> tuple[pd.DataFrame, list[str]]:

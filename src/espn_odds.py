@@ -86,6 +86,11 @@ COLUMNS = [
     "spread_home_open", "total_open",
     "provider", "source", "fetched_at",
 ]
+NUMERIC_COLUMNS = [
+    "spread_home", "market_margin", "total",
+    "spread_odds_home", "spread_odds_away", "over_odds", "under_odds",
+    "ml_home", "ml_away", "p_home_novig", "spread_home_open", "total_open",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +396,10 @@ def upsert_lines(rows: list[dict], path: Path = LINES_PATH) -> pd.DataFrame:
         return load_market_lines(path)
     new = pd.DataFrame(rows).reindex(columns=COLUMNS)
     new["game_id"] = new["game_id"].astype(str)
+    # Fixed dtypes: a line missing in every new row would otherwise be an
+    # all-None object column, which pandas warns about when concatenating.
+    for c in NUMERIC_COLUMNS:
+        new[c] = pd.to_numeric(new[c], errors="coerce").astype("float64")
     with _file_lock(path):
         existing = load_market_lines(path)
         keep = existing[~existing["game_id"].isin(new["game_id"])]

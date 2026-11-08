@@ -155,6 +155,7 @@ def fill_results(master: pd.DataFrame | None = None) -> pd.DataFrame:
 
     log.to_parquet(PRED_LOG, index=False)
     print(f"[tracker] {filled_count} maçın sonucu dolduruldu.")
+    _settle_coupons(log)
     return log
 
 
@@ -316,7 +317,19 @@ def fill_results_live(days_back: int = 7) -> pd.DataFrame:
     else:
         print("[tracker] fill_results_live: yeni sonuç bulunamadı.")
 
+    _settle_coupons(log)
     return log
+
+
+def _settle_coupons(log: pd.DataFrame) -> None:
+    """Grade the coupon log from the scores just filled (Faz 6)."""
+    try:
+        from coupon_tracker import settle_coupons
+        n = settle_coupons(log, PRED_DIR / "coupons_log.json")
+        if n:
+            print(f"[tracker] {n} kupon sonuçlandı.")
+    except Exception as e:  # kupon kaydı tahmin kaydını asla bozmasın
+        print(f"[tracker] kupon sonuçlandırma atlandı: {e!r}")
 
 
 def print_live_report() -> None:

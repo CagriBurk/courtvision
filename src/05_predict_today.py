@@ -269,6 +269,7 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
         reg_pred = {t: float(m.predict(X_live)[0]) for t, m in line_models.items()}
         lines = game_lines(dists or {}, reg_pred.get("margin"), reg_pred.get("total")) if reg_pred else None
         source = "classifier"
+        prob_clf = prob_home  # kupon seçimi iki modelin uyumuna bakar
         if win_source == "margin" and lines and "margin" in lines:
             prob_home = lines["margin"]["p_home_win"]
             source = "margin"
@@ -286,6 +287,9 @@ def predict_games(games: list[dict], live_feats: pd.DataFrame, model,
             "confidence":       conf,
             "model_factors":    json.dumps(model_factors, ensure_ascii=False),
             "win_source":       source,
+            "prob_home_classifier": prob_clf,
+            "home_games_played": _int(row.get("home_season_game_num")),
+            "away_games_played": _int(row.get("away_season_game_num")),
             # Handikap / toplam (modeller yoksa None)
             "pred_margin":      reg_pred.get("margin"),
             "pred_total":       reg_pred.get("total"),
@@ -437,6 +441,33 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
     return html
 
 
+def update_coupons(predictions: list[dict], dists: dict, target_date: date) -> None:
+    """Today's handicap coupons (Faz 6): build, log (locked ones kept), live view for the API."""
+    import coupon_tracker
+    from coupons import build_coupons
+
+    day_str = str(target_date)
+    if "margin" not in dists:
+        day = {"coupons": [], "games": [], "n_legs": 0,
+               "note": "Handikap modeli yok: önce 03 --task margin ve 04 çalıştırılmalı."}
+    elif not predictions:
+        day = {"coupons": [], "games": [], "n_legs": 0, "note": "Bugün programda maç yok."}
+    else:
+        day = build_coupons(predictions, dists["margin"])
+    started = {str(p["game_id"]) for p in predictions if p.get("game_status", 1) != 1}
+    today = coupon_tracker.save_coupons(day_str, day, started) if day["coupons"] or predictions else []
+    coupon_tracker.write_live_view(day_str, day, today)
+
+    if today:
+        print("\nKuponlar:")
+        for c in today:
+            lock = " [kilitli]" if c.get("locked") else ""
+            legs = " · ".join(l["label"] for l in c["legs"])
+            print(f"  {c['label']:8} %{c['p'] * 100:4.1f}  en az {c['min_odds']:.2f}{lock} | {legs}")
+    elif day.get("note"):
+        print(f"\nKupon yok: {day['note']}")
+
+
 def write_live_meta(target_date: date, n_games: int) -> None:
     """data/live/meta.json — the API uses it to decide if predictions are fresh."""
     meta = {
@@ -493,6 +524,7 @@ def main(target_date: date | None = None):
         print("Bugün programda maç yok.")
         pd.DataFrame().to_parquet(live_path, index=False)
         write_live_meta(target_date, 0)
+        update_coupons([], dists, target_date)
         fill_results(master)
         return
 
@@ -538,7 +570,8 @@ def main(target_date: date | None = None):
     pre_tip = [p for p in predictions if p.get("game_status", 1) == 1]
     if pre_tip:
         save_predictions(pre_tip)
-    fill_results(master)
+    update_coupons(predictions, dists, target_date)
+    fill_results(master)  # sonuçları ve kuponları kapatır
 
     print(f"\n{'='*60}")
     print(f"Tamamlandı! Rapor: {report_path}")

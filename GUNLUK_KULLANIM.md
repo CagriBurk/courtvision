@@ -269,3 +269,31 @@ python src/02_build_features.py
 python src/03_train_model.py --task all --trials 100
 python src/04_evaluate_model.py
 ```
+
+---
+
+## 13. Kuponlar ve karne
+
+**Kuponlar sayfası** her tahmin güncellemesinde yeniden kurulur:
+
+- Üç kupon: **Güvenli** (ayak başı ≈%72), **Dengeli** (≈%62), **Riskli** (≈%54). Yalnızca
+  handikap; taraf (maç sonucu) ve alt/üst kuponlara girmez.
+- Maç seçimi: başlamamış, iki takımı da sezonda en az 5 maç oynamış, kazanan modeli ile fark
+  modelinin aynı tarafı benzer olasılıkla gösterdiği maçlar. Ayak sayısı güçlü maç sayısına
+  göre 2-4. Sayfanın altındaki "Maç seçimi" tablosu her maçın neden seçildiğini ya da elendiğini yazar.
+- Her ayakta **en az** oran: adil oran + %5 güvenlik payı. iddaa'nın oranı bunun altındaysa o
+  ayağı oynama. Kuponun **en az toplam oranı** da aynı mantık.
+- **Kilit:** kupon, içindeki bir maç başlayınca ya da oynadığın toplam oranı kaydedince kilitlenir;
+  karneye o haliyle geçer. Kilitlenmemiş kuponlar sonraki güncellemede değişebilir (sakatlık haberi).
+- Oranı kaydetmek isteğe bağlıdır; kaydettiklerin için karnede kâr/zarar ve ROI hesaplanır.
+
+**Karne sayfası** "model ne vaat etti, ne gerçekleşti" sorusunu cevaplar:
+
+- **Kuponlar:** seviye başına tutma oranı (beklenenle), ayakların tutma oranı, oynananların kârı.
+- **Handikap:** her maçın 9 baremi favori tarafından okunur; "model %70-75 dediğinde ne kadar tuttu?"
+  tablosu ve kazanma farkı bantları. Mavi çizgi (vaat) gri şeridin (%95 aralık) içindeyse model
+  o seviyede dürüst.
+- **Taraf** ve **Alt / Üst:** aynı tablo; alt/üst sadece takip içindir.
+- Kupon tutma oranı küçük örneklerde çok oynar; modelin dürüstlüğünü barem ve ayak kalibrasyonundan oku.
+
+Kayıtlar: `data/predictions/coupons_log.json` (silme; tahmin kaydı gibi haftada bir yedekle).

@@ -4,11 +4,13 @@ import {
   AlertTriangle,
   BookOpen,
   Calculator,
+  ClipboardCheck,
   Clock,
   Lightbulb,
   RefreshCw,
   Scale,
   Target,
+  Ticket,
   TrendingUp
 } from 'lucide-react'
 import { useModelMetrics } from '../hooks/useModelMetrics'
@@ -281,7 +283,41 @@ export default function Guide(): ReactElement {
             </ul>
           </Card>
 
-          <Card icon={<RefreshCw size={15} />} title="Karne ve yeniden eğitim">
+          <Card icon={<Ticket size={15} />} title="Kuponlar">
+            <ul className="list-disc pl-5 space-y-1">
+              <li>
+                Her gün üç kupon: <B>Güvenli</B> (ayak başı ≈%72), <B>Dengeli</B> (≈%62),{' '}
+                <B>Riskli</B> (≈%54). Hepsi aynı güvenilir maçların favori tarafında, risk arttıkça
+                handikap büyür.
+              </li>
+              <li>
+                Sadece iki modelin aynı tarafı benzer olasılıkla gösterdiği maçlar girer; ayak
+                sayısı (2-4) güçlü maç sayısına göre. Kalabalık gün diye 4 ayak zorlanmaz.
+              </li>
+              <li>
+                Her ayağın <B>en az</B> oranı: iddaa o seçeneğe bunun altında oran veriyorsa o ayak
+                değerli değil. Kuponun “en az toplam oranı” da aynı mantık.
+              </li>
+              <li>
+                Kupon, maçlarından biri başlayınca kilitlenir. Oynadığın kuponun toplam oranını
+                kaydedersen hemen kilitlenir ve karnede kâr/zarar hesaplanır (isteğe bağlı).
+              </li>
+            </ul>
+          </Card>
+
+          <Card icon={<ClipboardCheck size={15} />} title="Karne">
+            <p>
+              Asıl soru: <B>model %70 dediğinde gerçekten ~%70 tutuyor mu?</B> Karne bunu taraf,
+              handikap baremleri ve alt/üst için ayrı ayrı gösterir. Her maç 9 handikap baremi
+              eklediği için handikap tablosu birkaç haftada anlamlı hale gelir.
+            </p>
+            <Tip>
+              Kupon tutma oranı küçük örneklerde çok oynar. Modelin dürüstlüğünü barem ve ayak
+              kalibrasyonundan oku; mavi çizgi gri şeridin içindeyse o seviyede vaat tutuyor.
+            </Tip>
+          </Card>
+
+          <Card icon={<RefreshCw size={15} />} title="Geçmiş ve yeniden eğitim">
             <p>
               <B>Geçmiş</B> sayfası her maçın sonucunu, fark ve toplam için “tahmin → gerçek”
               değerini gösterir (yeşil: ±5 içinde, kırmızı: 10+ sayı hata). Üstteki kartlar canlı

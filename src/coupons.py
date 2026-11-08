@@ -1,39 +1,38 @@
 """
 coupons.py
 ----------
-Daily coupons without bookmaker odds (Faz 6).
+Daily handicap coupons (Faz 6, reworked in 6b).
 
-Handicap coupons (safe / balanced / risky): every leg backs the model's
-favourite *giving points* (handicap -1.5 or more; -0.5 is just the money
-line, and a favourite receiving points is a line bookmakers rarely offer).
-A tier is a probability band; a game joins a tier only if one of its real
-handicaps falls in that band, and the line closest to the tier's target is
-taken. A slight favourite therefore cannot enter the safe coupon: reaching
-~72% would need it to *receive* points.
+Every leg backs a favourite *giving points* (handicap -1.5 or more). A tier
+is a probability band (safe / balanced / risky); a game joins a tier only
+if one of its handicaps falls in that band, and the line closest to the
+tier's target is taken.
 
-Over coupon (experimental): the over line closest to ~62% on the same
-reliable games. The total model does not beat its simple baseline, so this
-coupon is tracked separately in the report card.
+Pricing: each game is priced with the distribution the app shows for it.
+With a market line (6b) that is the closing line's error distribution
+centred on the market (see market_blend.py), which measured better than
+the model against real results; the model's own distribution is used only
+on days without any market line, and the coupon says so.
 
-Because the odds are unknown, each leg carries its fair line (where the
-model sees 50/50) and a minimum price: fair odds (1 / p) times a safety
-margin for what the bookmaker may know and the model does not. If the
-bookmaker's lines sit several points away from the fair line, the market
-disagrees with the model (injury, rest...) and the leg is best dropped.
+Which games: every game with a market line that has not started. The old
+filters (the two models agreeing, a strong favourite, enough games played)
+are gone: the market already prices those, and two models trained on the
+same features agreeing was not evidence of reliability.
 
-Which games: only ones the model is sure about, not as many as possible.
-  eligible  not started, both teams have played MIN_GAMES_PLAYED games,
-            the win classifier and the margin model pick the same side and
-            their win probabilities differ by at most MAX_DISAGREEMENT
-  strong    eligible, near-identical probabilities (STRONG_DISAGREEMENT)
-            and a clear favourite (STRONG_MIN_MARGIN points)
-The number of legs follows the number of strong games (MIN_LEGS..MAX_LEGS);
-a busy night does not force four legs. One leg per game per coupon.
+One game, one coupon: a game appears in at most one coupon, so one result
+cannot sink every coupon at once. Tiers are filled in order (safe takes
+the big favourites that reach its band, balanced the next, risky the
+rest); legs per coupon follow the number of eligible games
+(MIN_LEGS..MAX_LEGS).
+
+Each leg carries its fair odds (1 / p). The old over coupon is retired:
+against closing lines the total model's side won 47% of the time. Old
+over legs in the log still settle (leg_won).
 
 Line convention (as everywhere): handicap `line` is on the home margin.
   home leg wins when home margin > line   (home handicap = -line)
   away leg wins when home margin < line   (away handicap = +line)
-  over leg wins when home + away > line
+  over leg wins when home + away > line   (legacy over coupons)
 """
 
 from __future__ import annotations
@@ -50,15 +49,12 @@ TIERS = [
     {"key": "dengeli", "label": "Dengeli", "target": 0.62, "lo": 0.58, "hi": 0.68},
     {"key": "riskli", "label": "Riskli", "target": 0.54, "lo": 0.50, "hi": 0.58},
 ]
+# Retired, kept so coupons logged before 6b still sort and display
 OVER_TIER = {"key": "ust", "label": "Üst (deneysel)", "target": 0.62, "lo": 0.58, "hi": 0.68}
 TIER_ORDER = {t["key"]: i for i, t in enumerate([*TIERS, OVER_TIER])}
 
-SAFETY = 1.05              # her ayakta adil oranın en az %5 üstü
-MIN_LEGS, MAX_LEGS = 2, 4
-MAX_DISAGREEMENT = 0.10    # iki modelin ev kazanma olasılığı farkı (uygunluk)
-STRONG_DISAGREEMENT = 0.05
-STRONG_MIN_MARGIN = 4.0    # güçlü maç: favori en az 4 sayı önde bekleniyor
-MIN_GAMES_PLAYED = 5       # sezon başı: son-10 ve sezon istatistikleri oturmamış
+SAFETY = 1.05              # legacy "minimum odds" = fair odds × 1.05 (shown, not a bet advice)
+MIN_LEGS, MAX_LEGS = 2, 3
 MIN_GIVEN = 1.5            # favori en az 1.5 sayı handikap verir
 MAX_HANDICAP = 30.0
 
@@ -66,13 +62,13 @@ MAX_HANDICAP = 30.0
 # ---------------------------------------------------------------------------
 # Lines
 # ---------------------------------------------------------------------------
-def favourite_side(dist: dict, pred_margin: float) -> str:
-    return "home" if center(dist, pred_margin)[0] >= 0 else "away"
+def favourite_side(dist: dict, mu: float) -> str:
+    return "home" if center(dist, mu)[0] >= 0 else "away"
 
 
-def handicap_options(dist: dict, pred_margin: float, side: str) -> list[dict]:
+def handicap_options(dist: dict, mu: float, side: str) -> list[dict]:
     """Every half-point handicap for `side` with its probability."""
-    k, p = score_pmf(dist, pred_margin)
+    k, p = score_pmf(dist, mu)
     k, p = k[0], p[0]
     cdf = np.cumsum(p)
     out = []
@@ -85,17 +81,10 @@ def handicap_options(dist: dict, pred_margin: float, side: str) -> list[dict]:
     return out
 
 
-def favourite_options(dist: dict, pred_margin: float) -> list[dict]:
+def favourite_options(dist: dict, mu: float) -> list[dict]:
     """The favourite's handicaps where it gives at least MIN_GIVEN points."""
-    side = favourite_side(dist, pred_margin)
-    return [o for o in handicap_options(dist, pred_margin, side) if o["handicap"] <= -MIN_GIVEN]
-
-
-def over_options(dist: dict, pred_total: float) -> list[dict]:
-    k, p = score_pmf(dist, pred_total)
-    cdf = np.cumsum(p[0])
-    return [{"side": "over", "line": float(kk) + 0.5, "p": float(1 - c)}
-            for kk, c in zip(k[0], cdf) if 0.02 < 1 - c < 0.98]
+    side = favourite_side(dist, mu)
+    return [o for o in handicap_options(dist, mu, side) if o["handicap"] <= -MIN_GIVEN]
 
 
 def pick_line(options: list[dict], target: float, lo: float = 0.0, hi: float = 1.0) -> dict | None:
@@ -110,8 +99,15 @@ def handicap_label(abbr: str, handicap: float) -> str:
     return f"{abbr} {'+' if handicap > 0 else ''}{handicap:.1f}"
 
 
+def margin_label(home: str, away: str, margin: float | None) -> str | None:
+    """Expected home margin → the favourite's handicap label ('DAL -7.5')."""
+    if margin is None:
+        return None
+    return handicap_label(home if margin >= 0 else away, -abs(margin))
+
+
 def min_odds(p: float, safety: float = SAFETY) -> float:
-    """Lowest price worth taking, rounded up to 2 decimals."""
+    """Fair odds with a 5% margin, rounded up to 2 decimals."""
     return math.ceil(safety / p * 100) / 100
 
 
@@ -124,99 +120,89 @@ def leg_won(leg: dict, home_pts: float, away_pts: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Game selection
+# Pricing and game selection
 # ---------------------------------------------------------------------------
-def _lines(pred: dict) -> dict:
-    raw = pred.get("lines")
+def _json(pred: dict, key: str) -> dict:
+    raw = pred.get(key)
     return (json.loads(raw) if isinstance(raw, str) else raw) or {}
 
 
-def assess_game(pred: dict, dist: dict) -> dict | None:
-    """Reliability of one game for coupons, with readable reasons. None = no handicap data."""
-    lines = _lines(pred)
-    if pred.get("pred_margin") is None or "margin" not in lines:
+def pricing(pred: dict, model_dist: dict | None, market_dist: dict | None) -> tuple[dict, float, str] | None:
+    """(distribution, centre argument, 'market' | 'model') of the game's margin, None if unpriced."""
+    lines, market = _json(pred, "lines"), _json(pred, "market")
+    if (market.get("source") or {}).get("margin") == "market" and market_dist and "margin" in lines:
+        return market_dist, float(lines["margin"]["pred"]), "market"
+    if model_dist and pred.get("pred_margin") is not None:
+        return model_dist, float(pred["pred_margin"]), "model"
+    return None
+
+
+def assess_game(pred: dict, model_dist: dict | None, market_dist: dict | None = None) -> dict | None:
+    """What the coupon page shows about one game. None = no handicap pricing at all."""
+    priced = pricing(pred, model_dist, market_dist)
+    if priced is None:
         return None
-
+    dist, mu, source = priced
     home, away = pred["home_team_abbr"], pred["away_team_abbr"]
-    c = float(center(dist, pred["pred_margin"])[0])
-    side = favourite_side(dist, pred["pred_margin"])
-    p_margin = float(lines["margin"]["p_home_win"])
-    p_clf = float(pred.get("prob_home_classifier", pred.get("prob_home", 0.5)))
-    gap = abs(p_clf - p_margin)
+    c = float(center(dist, mu)[0])
+    side = favourite_side(dist, mu)
+    market, lines = _json(pred, "market"), _json(pred, "lines")
+    model_lines = _json(pred, "model_lines") or (lines if source == "model" else {})
 
-    reasons, ok = [], True
-    if pred.get("game_status", 1) != 1:
-        ok = False
+    reasons = []
+    started = pred.get("game_status", 1) != 1
+    if started:
         reasons.append("maç başladı")
-    if (p_clf - 0.5) * (p_margin - 0.5) <= 0:
-        ok = False
-        reasons.append("modeller farklı tarafı gösteriyor")
-    elif gap > MAX_DISAGREEMENT:
-        ok = False
-        reasons.append(f"modeller arasında %{gap * 100:.0f} fark")
-    played = [pred.get("home_games_played"), pred.get("away_games_played")]
-    if any(g is not None and g < MIN_GAMES_PLAYED for g in played):
-        ok = False
-        reasons.append(f"takımlardan biri {MIN_GAMES_PLAYED} maçtan az oynadı")
+    if source == "market":
+        reasons.append(f"piyasa: {margin_label(home, away, market.get('market_margin'))} "
+                       f"({market.get('provider') or 'piyasa'})")
+    else:
+        reasons.append("piyasa çizgisi yok: model çizgisi")
+    model_fair = (model_lines.get("margin") or {}).get("fair_line")
+    if model_fair is not None:
+        reasons.append(f"model: {margin_label(home, away, model_fair)}")
 
-    strong = ok and gap <= STRONG_DISAGREEMENT and abs(c) >= STRONG_MIN_MARGIN
-    if ok:
-        reasons.append(f"modeller uyumlu (fark %{gap * 100:.1f})")
-        reasons.append(f"beklenen fark {abs(c):.1f} sayı")
-    score = (1 - min(gap / MAX_DISAGREEMENT, 1)) + 0.5 * min(abs(c) / 10, 1)
-
-    fav = home if side == "home" else away
-    fl = float(fair_line(dist, pred["pred_margin"])[0])
     total = lines.get("total")
     return {
         "game_id": str(pred["game_id"]),
         "home": home,
         "away": away,
-        "favourite": fav,
+        "favourite": home if side == "home" else away,
         "side": side,
-        "pred_margin": float(pred["pred_margin"]),
-        "pred_total": pred.get("pred_total"),
         "center": round(c, 2),
-        "fair_label": handicap_label(fav, -abs(fl)),
+        "fair_label": margin_label(home, away, float(fair_line(dist, mu)[0])),
         "fair_total": total["fair_line"] if total else None,
-        "p_classifier": round(p_clf, 4),
-        "p_margin": round(p_margin, 4),
-        "gap": round(gap, 4),
-        "score": round(score, 4),
-        "eligible": ok,
-        "strong": strong,
+        "source": source,
+        "market_label": margin_label(home, away, market.get("market_margin")),
+        "model_label": margin_label(home, away, model_fair),
+        "eligible": not started,
         "reasons": reasons,
         "game_time_utc": pred.get("game_time_utc"),
     }
 
 
-def n_legs_for(assessed: list[dict]) -> int:
-    eligible = [g for g in assessed if g["eligible"]]
-    n_strong = sum(g["strong"] for g in eligible)
-    return min(max(n_strong, MIN_LEGS), MAX_LEGS, len(eligible))
+def legs_per_coupon(n_eligible: int) -> int:
+    """Enough legs to fill the tiers with different games: 2-3."""
+    return int(min(MAX_LEGS, max(MIN_LEGS, n_eligible // len(TIERS))))
 
 
 # ---------------------------------------------------------------------------
 # Coupons
 # ---------------------------------------------------------------------------
-def _leg(game: dict, opt: dict, market: str) -> dict:
+def _leg(game: dict, opt: dict) -> dict:
     p = opt["p"]
-    if market == "spread":
-        label, fair = handicap_label(game["favourite"], opt["handicap"]), game["fair_label"]
-        team = game["favourite"]
-    else:
-        label, fair, team = f"Üst {opt['line']:.1f}", f"{game['fair_total']:.1f}", None
     return {
         "game_id": game["game_id"],
         "home": game["home"],
         "away": game["away"],
-        "market": market,
-        "team": team,
+        "market": "spread",
+        "team": game["favourite"],
         "side": opt["side"],
         "line": opt["line"],
-        "handicap": opt.get("handicap"),
-        "label": label,
-        "fair": fair,
+        "handicap": opt["handicap"],
+        "label": handicap_label(game["favourite"], opt["handicap"]),
+        "fair": game["fair_label"],
+        "source": game["source"],
         "p": round(p, 4),
         "fair_odds": round(1 / p, 2),
         "min_odds": min_odds(p),
@@ -229,7 +215,7 @@ def _coupon(tier: dict, legs: list[dict]) -> dict:
         "tier": tier["key"],
         "label": tier["label"],
         "target": tier["target"],
-        "experimental": tier is OVER_TIER,
+        "experimental": False,
         "legs": legs,
         "p": round(float(np.prod([l["p"] for l in legs])), 4),
         "fair_odds": round(float(np.prod([1 / l["p"] for l in legs])), 2),
@@ -237,47 +223,63 @@ def _coupon(tier: dict, legs: list[dict]) -> dict:
     }
 
 
-def build_coupons(predictions: list[dict], dist: dict, total_dist: dict | None = None) -> dict:
+def build_coupons(predictions: list[dict], model_dist: dict | None,
+                  market_dist: dict | None = None, locked: dict[str, set[str]] | None = None) -> dict:
     """
-    Today's coupons from 05's prediction dicts and the margin (and total)
-    distribution. Returns {"games", "coupons", "n_legs", "note", "skipped"}.
+    Today's coupons from 05's prediction dicts. `model_dist` / `market_dist`
+    are the margin distributions (distribution.json / market_distribution.json).
+    `locked` = {tier: game_ids} of the day's locked coupons (coupon_tracker):
+    those tiers are not rebuilt and their games are not reused.
+    Returns {"games", "coupons", "n_legs", "note", "skipped", "source"}.
     """
-    assessed = [a for a in (assess_game(p, dist) for p in predictions) if a]
-    assessed.sort(key=lambda g: (g["eligible"], g["strong"], g["score"]), reverse=True)
-    n_legs = n_legs_for(assessed)
-    out = {"games": assessed, "coupons": [], "n_legs": n_legs, "note": None, "skipped": []}
+    locked = locked or {}
+    priced = {}
+    assessed = []
+    for p in predictions:
+        a = assess_game(p, model_dist, market_dist)
+        if a:
+            assessed.append(a)
+            priced[a["game_id"]] = pricing(p, model_dist, market_dist)[:2]
+
+    # Market-priced games when there are any; the model only on days without a line
+    has_market = any(a["source"] == "market" for a in assessed)
+    source = "market" if has_market else "model"
+    for a in assessed:
+        if a["source"] != source and a["eligible"]:
+            a["eligible"] = False
+            a["reasons"].append("piyasa çizgisi olmadığı için kupon dışı")
+    assessed.sort(key=lambda g: (g["eligible"], abs(g["center"])), reverse=True)
     eligible = [g for g in assessed if g["eligible"]]
-    if n_legs < MIN_LEGS:
-        out["note"] = (f"Kupon için en az {MIN_LEGS} güvenilir maç gerekli; "
-                       f"bugün {len(eligible)} uygun maç var.")
+
+    reserved = set().union(*locked.values()) if locked else set()
+    n_legs = legs_per_coupon(len([g for g in eligible if g["game_id"] not in reserved]))
+    out = {"games": assessed, "coupons": [], "n_legs": n_legs, "note": None, "skipped": [],
+           "source": source}
+    if not has_market and assessed:
+        out["note"] = "Bugün piyasa çizgisi yok: kuponlar modelin çizgisiyle kuruldu (piyasadan zayıf)."
+    if len(eligible) < MIN_LEGS:
+        out["note"] = (f"Kupon için en az {MIN_LEGS} uygun maç gerekli; bugün {len(eligible)} var.")
         return out
 
+    used = set(reserved)
     for tier in TIERS:
-        legs = []
+        if tier["key"] in locked:
+            continue
+        candidates = []
         for g in eligible:
-            opt = pick_line(favourite_options(dist, g["pred_margin"]), tier["target"], tier["lo"], tier["hi"])
+            if g["game_id"] in used:
+                continue
+            dist, mu = priced[g["game_id"]]
+            opt = pick_line(favourite_options(dist, mu), tier["target"], tier["lo"], tier["hi"])
             if opt:
-                legs.append(_leg(g, opt, "spread"))
-            if len(legs) == n_legs:
-                break
-        if len(legs) >= MIN_LEGS:
-            out["coupons"].append(_coupon(tier, legs))
+                candidates.append((round(abs(opt["p"] - tier["target"]), 6), -abs(g["center"]), g, opt))
+        candidates.sort(key=lambda t: t[:2])
+        chosen = candidates[:n_legs]
+        if len(chosen) >= MIN_LEGS:
+            out["coupons"].append(_coupon(tier, [_leg(g, opt) for *_, g, opt in chosen]))
+            used.update(g["game_id"] for *_, g, _ in chosen)
         else:
             out["skipped"].append({"tier": tier["key"], "label": tier["label"],
                                    "reason": f"handikapla %{tier['lo'] * 100:.0f}-{tier['hi'] * 100:.0f} "
-                                             f"aralığına giren {MIN_LEGS} güvenilir maç yok"})
-
-    if total_dist:
-        legs = []
-        for g in eligible:
-            if g["pred_total"] is None or g["fair_total"] is None:
-                continue
-            opt = pick_line(over_options(total_dist, g["pred_total"]),
-                            OVER_TIER["target"], OVER_TIER["lo"], OVER_TIER["hi"])
-            if opt:
-                legs.append(_leg(g, opt, "total"))
-            if len(legs) == n_legs:
-                break
-        if len(legs) >= MIN_LEGS:
-            out["coupons"].append(_coupon(OVER_TIER, legs))
+                                             f"aralığına giren, başka kupona girmemiş {MIN_LEGS} maç yok"})
     return out

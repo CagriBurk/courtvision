@@ -469,20 +469,24 @@ def generate_report(predictions: list[dict], target_date: date) -> str:
     return html
 
 
-def update_coupons(predictions: list[dict], dists: dict, target_date: date) -> None:
-    """Today's handicap coupons (Faz 6): build, log (locked ones kept), live view for the API."""
+def update_coupons(predictions: list[dict], dists: dict, target_date: date,
+                   market_dist: dict | None = None) -> None:
+    """Today's handicap coupons (Faz 6/6b): build, log (locked ones kept), live view for the API."""
     import coupon_tracker
     from coupons import build_coupons
 
     day_str = str(target_date)
-    if "margin" not in dists:
+    started = {str(p["game_id"]) for p in predictions if p.get("game_status", 1) != 1}
+    market_margin = (market_dist or {}).get("margin")
+    if "margin" not in dists and market_margin is None:
         day = {"coupons": [], "games": [], "n_legs": 0,
-               "note": "Handikap modeli yok: önce 03 --task margin ve 04 çalıştırılmalı."}
+               "note": "Handikap dağılımı yok: önce 04 (ya da 09) çalıştırılmalı."}
     elif not predictions:
         day = {"coupons": [], "games": [], "n_legs": 0, "note": "Bugün programda maç yok."}
     else:
-        day = build_coupons(predictions, dists["margin"], dists.get("total"))
-    started = {str(p["game_id"]) for p in predictions if p.get("game_status", 1) != 1}
+        # Locked coupons stay as they are; their games are not reused
+        day = build_coupons(predictions, dists.get("margin"), market_margin,
+                            coupon_tracker.locked_games(day_str, started))
     today = coupon_tracker.save_coupons(day_str, day, started) if day["coupons"] or predictions else []
     coupon_tracker.write_live_view(day_str, day, today)
 
@@ -612,7 +616,7 @@ def main(target_date: date | None = None):
     pre_tip = [p for p in predictions if p.get("game_status", 1) == 1]
     if pre_tip:
         save_predictions(pre_tip)
-    update_coupons(predictions, dists, target_date)
+    update_coupons(predictions, dists, target_date, market_dist)
     fill_results(master)  # sonuçları ve kuponları kapatır
 
     print(f"\n{'='*60}")

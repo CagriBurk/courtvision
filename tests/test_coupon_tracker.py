@@ -25,31 +25,39 @@ def paths(tmp_path, monkeypatch):
     return tmp_path
 
 
-def day_of(*margins):
+SIX = (14.0, -13.0, 9.0, -8.0, 4.5, -4.0)   # two big, two medium, two slight favourites
+ALL = {f"G{i}" for i in range(6)}
+
+
+def day_of(*margins, locked=None):
     preds = [pred(f"G{i}", m) for i, m in enumerate(margins)]
-    return preds, build_coupons(preds, DIST)
+    return preds, build_coupons(preds, DIST, locked=locked)
 
 
 def test_unlocked_coupons_are_rebuilt_locked_ones_kept(paths):
-    _, day = day_of(9.0, -8.0, 7.0)
+    _, day = day_of(*SIX)
     first = coupon_tracker.save_coupons("2026-11-08", day, started_ids=set())
     assert [c["id"] for c in first] == ["2026-11-08:guvenli", "2026-11-08:dengeli", "2026-11-08:riskli"]
     assert not any(c["locked"] for c in first)
 
     # Later refresh: injury news moved the lines, nothing has started → replaced
-    _, later = day_of(12.0, -8.0, 7.0)
+    _, later = day_of(17.0, *SIX[1:])
     second = coupon_tracker.save_coupons("2026-11-08", later, started_ids=set())
     assert second[0]["legs"][0]["label"] != first[0]["legs"][0]["label"]
 
-    # The user played the safe coupon → it no longer changes
+    # The user played the safe coupon → it no longer changes, and its games stay out of the rest
     coupon_tracker.set_played_odds("2026-11-08:guvenli", 3.40)
-    _, again = day_of(15.0, -8.0, 7.0)
+    locked = coupon_tracker.locked_games("2026-11-08", set())
+    assert locked == {"guvenli": {"G0", "G1"}}
+    _, again = day_of(19.0, -13.0, 10.0, -8.0, 4.5, -4.0, locked=locked)
+    assert "guvenli" not in [c["tier"] for c in again["coupons"]]
+    assert not {"G0", "G1"} & {l["game_id"] for c in again["coupons"] for l in c["legs"]}
     third = {c["tier"]: c for c in coupon_tracker.save_coupons("2026-11-08", again, set())}
     assert third["guvenli"]["legs"] == second[0]["legs"] and third["guvenli"]["played_odds"] == 3.4
     assert third["dengeli"]["legs"] != second[1]["legs"]
 
-    # A game started → every coupon holding it is locked
-    fourth = coupon_tracker.save_coupons("2026-11-08", {"coupons": []}, started_ids={"G1"})
+    # Games started → the coupons holding them are locked
+    fourth = coupon_tracker.save_coupons("2026-11-08", {"coupons": []}, started_ids=ALL)
     assert all(c["locked"] for c in fourth) and len(fourth) == 3
 
     # Other days are untouched
@@ -61,29 +69,29 @@ def test_unlocked_coupons_are_rebuilt_locked_ones_kept(paths):
 
 
 def test_clearing_played_odds_unlocks_until_a_game_starts(paths):
-    _, day = day_of(12.0, -11.0, 9.5)
+    _, day = day_of(*SIX)
     coupon_tracker.save_coupons("2026-11-08", day, set())
     coupon_tracker.set_played_odds("2026-11-08:guvenli", 3.1)
     c = coupon_tracker.set_played_odds("2026-11-08:guvenli", None)
     assert c["played_odds"] is None and c["locked"] is False
-    _, later = day_of(15.0, -11.0, 9.5)
+    _, later = day_of(17.0, *SIX[1:])
     rebuilt = {c["tier"]: c for c in coupon_tracker.save_coupons("2026-11-08", later, set())}
     assert rebuilt["guvenli"]["legs"] != c["legs"]          # unlocked → rebuilt
-    relocked = coupon_tracker.save_coupons("2026-11-08", later, {"G0"})
-    assert all(x["locked"] for x in relocked)               # a game started → locked again
+    relocked = {x["tier"]: x for x in coupon_tracker.save_coupons("2026-11-08", later, {"G0"})}
+    assert relocked["guvenli"]["locked"]                    # its game started → locked again
+    assert not relocked["dengeli"]["locked"]                # G0 is not in the balanced coupon
 
 
 def test_coupons_settle_when_scores_arrive(paths):
-    preds, day = day_of(9.0, -8.0, 7.0)
+    preds, day = day_of(*SIX)
     coupon_tracker.save_coupons("2026-11-08", day, set())
     prediction_tracker.save_predictions(preds)
 
     safe = next(c for c in coupon_tracker.load_coupons() if c["tier"] == "guvenli")
     legs = {l["game_id"]: l for l in safe["legs"]}
-    # Scores that beat every safe-coupon line except G2's in the risky one
     master = pd.DataFrame({
-        "game_id": ["G0", "G1", "G2"], "target": [1, 0, 1],
-        "pts_home": [130, 95, 110], "pts_away": [100, 125, 104],
+        "game_id": [f"G{i}" for i in range(6)], "target": [1, 0, 1, 0, 0, 1],
+        "pts_home": [130, 95, 110, 100, 101, 99], "pts_away": [100, 125, 104, 112, 103, 104],
     })
     prediction_tracker.fill_results(master)
 
@@ -99,7 +107,8 @@ def test_coupons_settle_when_scores_arrive(paths):
 
 
 def test_a_lost_leg_settles_the_coupon_early(paths):
-    preds, day = day_of(9.0, -8.0)
+    preds, day = day_of(14.0, -13.0)
+    assert day["coupons"]
     coupon_tracker.save_coupons("2026-11-08", day, set())
     prediction_tracker.save_predictions(preds)
     # Only G0 finished, and the favourite lost
@@ -111,13 +120,14 @@ def test_a_lost_leg_settles_the_coupon_early(paths):
 
 
 def test_predict_today_writes_the_live_view(paths):
-    preds = [pred(f"G{i}", m) for i, m in enumerate([9.0, -8.0, 7.0, 1.0])]
+    preds = [pred(f"G{i}", m) for i, m in enumerate([*SIX, 1.0])]
     predict_today.update_coupons(preds, {"margin": DIST}, pd.Timestamp("2026-11-08").date())
     view = json.loads((paths / "live" / "coupons.json").read_text(encoding="utf-8"))
-    assert view["date"] == "2026-11-08" and view["n_legs"] == 3
+    assert view["date"] == "2026-11-08" and view["n_legs"] == 2
     assert len(view["coupons"]) == 3 and view["coupons"][0]["id"] == "2026-11-08:guvenli"
-    assert len(view["games"]) == 4  # every game with its reasons, chosen or not
+    assert len(view["games"]) == 7  # every game with its reasons, chosen or not
+    assert "piyasa çizgisi yok" in view["note"]   # no market line: model-priced, and it says so
 
     predict_today.update_coupons(preds, {}, pd.Timestamp("2026-11-09").date())
     view = json.loads((paths / "live" / "coupons.json").read_text(encoding="utf-8"))
-    assert view["coupons"] == [] and "Handikap modeli yok" in view["note"]
+    assert view["coupons"] == [] and "Handikap dağılımı yok" in view["note"]

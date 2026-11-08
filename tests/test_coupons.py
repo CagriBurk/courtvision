@@ -14,15 +14,20 @@ from coupons import (
     build_coupons,
     handicap_options,
     leg_won,
+    legs_per_coupon,
     min_odds,
     pick_line,
 )
+from market_blend import build_lines
 from score_dist import game_lines
 
 DIST = {"task": "margin", "shape": "normal", "sigma": {"kind": "const", "value": 13.6}, "no_tie": True}
+MARKET = {"task": "margin", "shape": "normal", "sigma": {"kind": "const", "value": 13.4}, "no_tie": True}
+MARKET_DIST = {"margin": MARKET, "blend": {"margin": {"w": 0.0}, "total": {"w": 0.0}}}
 
 
 def pred(gid, margin, p_clf=None, played=20, status=1, home="HOM", away="AWY"):
+    """A game priced by the model only (no market line)."""
     lines = game_lines({"margin": DIST}, margin, None)
     p_mar = lines["margin"]["p_home_win"]
     return {
@@ -31,6 +36,19 @@ def pred(gid, margin, p_clf=None, played=20, status=1, home="HOM", away="AWY"):
         "prob_home": p_mar if p_clf is None else p_clf,
         "prob_home_classifier": p_mar if p_clf is None else p_clf,
         "home_games_played": played, "away_games_played": played, "game_status": status,
+    }
+
+
+def mpred(gid, market_margin, model_margin=None, status=1, home="HOM", away="AWY"):
+    """A game with a market line, built the way 05 builds it."""
+    model_margin = market_margin + 5 if model_margin is None else model_margin
+    market = {"spread_home": -market_margin, "market_margin": market_margin, "total": None,
+              "p_home_novig": None, "provider": "DraftKings"}
+    lines, model_lines, info = build_lines({"margin": DIST}, {"margin": model_margin}, market, MARKET_DIST)
+    return {
+        "game_id": gid, "home_team_abbr": home, "away_team_abbr": away,
+        "pred_margin": model_margin, "game_status": status,
+        "lines": json.dumps(lines), "model_lines": json.dumps(model_lines), "market": json.dumps(info),
     }
 
 
@@ -49,81 +67,83 @@ def test_handicap_lines_and_settlement():
     assert min_odds(0.5) == 2.1 and min_odds(0.72) >= 1.05 / 0.72
 
 
-def test_game_filters():
-    assert assess_game(pred("G1", 8.0), DIST)["strong"]
-    assert not assess_game(pred("G2", 2.0), DIST)["strong"]            # no clear favourite
-    assert assess_game(pred("G2", 2.0), DIST)["eligible"]
-    assert not assess_game(pred("G3", 8.0, p_clf=0.45), DIST)["eligible"]  # opposite sides
-    far = assess_game(pred("G4", 8.0, p_clf=0.95), DIST)
-    assert not far["eligible"] and "fark" in far["reasons"][0]
-    assert not assess_game(pred("G5", 8.0, played=3), DIST)["eligible"]  # early season
-    assert not assess_game(pred("G6", 8.0, status=2), DIST)["eligible"]   # already started
-    assert assess_game({**pred("G7", 8.0), "lines": None}, DIST) is None
+def test_assess_game_prices_with_the_market():
+    g = assess_game(mpred("M", 7.5, model_margin=12.0, home="DAL", away="BKN"), DIST, MARKET)
+    assert g["source"] == "market" and g["eligible"]
+    assert g["center"] == pytest.approx(7.5)              # the market, not the model's 12
+    assert g["market_label"] == "DAL -7.5"
+    assert g["model_label"].startswith("DAL -")
+    assert any("piyasa: DAL -7.5" in r for r in g["reasons"])
+
+    m = assess_game(pred("P", 8.0), DIST, MARKET)          # no market line → model
+    assert m["source"] == "model" and m["market_label"] is None
+    assert not assess_game(mpred("S", 7.5, status=2), DIST, MARKET)["eligible"]   # started
+    assert assess_game({**pred("N", 8.0), "lines": None, "pred_margin": None}, DIST, MARKET) is None
 
 
-def test_build_coupons_uses_reliable_games_only():
-    preds = [pred(f"S{i}", m) for i, m in enumerate([12.0, -11.0, 9.5])]  # 3 strong, big favourites
-    preds += [pred("W1", 1.5), pred("X1", 8.0, p_clf=0.4)]                # weak, contradicting
-    out = build_coupons(preds, DIST)
-    assert out["n_legs"] == 3
+def test_one_game_one_coupon():
+    margins = [14.0, -13.0, 9.0, -8.0, 4.5, -4.0]
+    preds = [mpred(f"G{i}", m) for i, m in enumerate(margins)]
+    out = build_coupons(preds, DIST, MARKET)
+    assert out["source"] == "market" and out["n_legs"] == 2
     assert [c["tier"] for c in out["coupons"]] == [t["key"] for t in TIERS]
+    ids = [l["game_id"] for c in out["coupons"] for l in c["legs"]]
+    assert len(ids) == len(set(ids)) == 6                 # every game used once
     for c in out["coupons"]:
         tier = next(t for t in TIERS if t["key"] == c["tier"])
-        ids = [l["game_id"] for l in c["legs"]]
-        assert set(ids) <= {"S0", "S1", "S2"} and len(set(ids)) == len(ids)
         assert c["p"] == pytest.approx(np.prod([l["p"] for l in c["legs"]]), abs=1e-3)
-        assert c["min_odds"] >= c["fair_odds"] * 1.05 ** len(c["legs"]) - 0.02
         for l in c["legs"]:
             assert tier["lo"] <= l["p"] < tier["hi"]
-            assert l["handicap"] <= -1.5 and l["market"] == "spread"  # the favourite gives points
+            assert l["handicap"] <= -1.5 and l["market"] == "spread" and l["source"] == "market"
             assert l["fair"].startswith(l["team"])
-    safe, risky = out["coupons"][0], out["coupons"][-1]
-    assert safe["p"] > risky["p"] and safe["fair_odds"] < risky["fair_odds"]
-    # The away favourite's leg is labelled from the away side
-    s1 = next(l for l in safe["legs"] if l["game_id"] == "S1")
-    assert s1["team"] == "AWY" and s1["side"] == "away" and s1["label"].startswith("AWY -")
+    # The safe coupon takes the biggest favourites
+    safe = {l["game_id"] for l in out["coupons"][0]["legs"]}
+    assert safe == {"G0", "G1"}
+    away = next(l for l in out["coupons"][0]["legs"] if l["game_id"] == "G1")
+    assert away["team"] == "AWY" and away["side"] == "away" and away["label"].startswith("AWY -")
+    assert "ust" not in [c["tier"] for c in out["coupons"]]
+
+
+def test_market_games_take_precedence_over_model_only_games():
+    preds = [mpred(f"M{i}", m) for i, m in enumerate([12.0, -11.0, 6.0, -5.0])] + [pred("P", 15.0)]
+    out = build_coupons(preds, DIST, MARKET)
+    p = next(g for g in out["games"] if g["game_id"] == "P")
+    assert not p["eligible"] and "kupon dışı" in p["reasons"][-1]
+    assert "P" not in [l["game_id"] for c in out["coupons"] for l in c["legs"]]
+    assert out["note"] is None
+
+
+def test_model_lines_only_on_days_without_market():
+    preds = [pred(f"S{i}", m) for i, m in enumerate([12.0, -11.0, 9.5, -9.0, 5.0, -4.5])]
+    out = build_coupons(preds, DIST, MARKET)
+    assert out["source"] == "model" and "piyasa çizgisi yok" in out["note"]
+    assert out["coupons"] and all(l["source"] == "model" for c in out["coupons"] for l in c["legs"])
 
 
 def test_slight_favourite_never_receives_points():
     """A 3-4 point favourite would need +points to reach ~72%: it stays out of the safe coupon."""
-    preds = [pred("MIA", 4.0, home="MIA", away="CHI"), pred("BIG", 12.0), pred("BIG2", -11.5)]
-    out = build_coupons(preds, DIST)
+    preds = [mpred("MIA", 4.0, home="MIA", away="CHI"), mpred("BIG", 12.0), mpred("BIG2", -11.5),
+             mpred("MID", 7.0)]
+    out = build_coupons(preds, DIST, MARKET)
     tiers = {c["tier"]: c for c in out["coupons"]}
     assert "MIA" not in [l["game_id"] for l in tiers["guvenli"]["legs"]]
-    mia = [l for c in out["coupons"] for l in c["legs"] if l["game_id"] == "MIA"]
-    assert mia and all(l["handicap"] <= -1.5 for l in mia)
+    assert all(l["handicap"] <= -1.5 for c in out["coupons"] for l in c["legs"])
     # Two slight favourites only: no safe coupon at all, with the reason
-    out = build_coupons([pred("A", 4.0), pred("B", -4.5)], DIST)
+    out = build_coupons([mpred("A", 4.0), mpred("B", -4.5)], DIST, MARKET)
     assert "guvenli" not in [c["tier"] for c in out["coupons"]]
     assert out["skipped"][0]["tier"] == "guvenli" and "aralığına" in out["skipped"][0]["reason"]
 
 
-def test_over_coupon_is_experimental():
-    total = {"task": "total", "shape": "normal", "sigma": {"kind": "const", "value": 18.8}, "no_tie": False}
-    preds = []
-    for i, m in enumerate([12.0, -11.0, 9.5]):
-        p = pred(f"S{i}", m)
-        lines = game_lines({"margin": DIST, "total": total}, m, 226.0 + i)
-        preds.append({**p, "pred_total": 226.0 + i, "lines": json.dumps(lines)})
-    out = build_coupons(preds, DIST, total)
-    over = out["coupons"][-1]
-    assert over["tier"] == "ust" and over["experimental"] is True
-    for l in over["legs"]:
-        assert l["market"] == "total" and l["label"].startswith("Üst ")
-        assert 0.58 <= l["p"] < 0.68 and l["line"] < 226.0 + 2  # over a line below the projection
+def test_legs_per_coupon_and_too_few_games():
+    assert [legs_per_coupon(n) for n in (2, 3, 6, 8, 9, 20)] == [2, 2, 2, 2, 3, 3]
+    lonely = build_coupons([mpred("S0", 9.0), mpred("S1", 9.0, status=2)], DIST, MARKET)
+    assert lonely["coupons"] == [] and "en az 2" in lonely["note"]
+
+
+def test_legacy_over_legs_still_settle():
     assert leg_won({"market": "total", "side": "over", "line": 220.5}, 112, 110)
     assert not leg_won({"market": "total", "side": "over", "line": 220.5}, 110, 110)
-    # Without a total distribution there is no over coupon
-    assert "ust" not in [c["tier"] for c in build_coupons(preds, DIST)["coupons"]]
-
-
-def test_leg_count_follows_strong_games():
-    many_weak = [pred(f"W{i}", 2.0 + 0.1 * i) for i in range(6)]
-    assert build_coupons(many_weak, DIST)["n_legs"] == 2      # busy night, no strong games
-    many_strong = [pred(f"S{i}", 9.0 + i) for i in range(6)]
-    assert build_coupons(many_strong, DIST)["n_legs"] == 4    # capped
-    lonely = build_coupons([pred("S0", 9.0), pred("X", 9.0, p_clf=0.3)], DIST)
-    assert lonely["coupons"] == [] and "en az 2" in lonely["note"]
+    assert coupons.TIER_ORDER["ust"] == 3
 
 
 def test_legs_win_as_often_as_promised():

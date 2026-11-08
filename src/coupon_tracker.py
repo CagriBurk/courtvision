@@ -53,6 +53,12 @@ def _is_locked(c: dict, started_ids: set[str]) -> bool:
                 or any(l["game_id"] in started_ids for l in c["legs"]))
 
 
+def locked_games(date: str, started_ids: set[str]) -> dict[str, set[str]]:
+    """{tier: game_ids} of the date's coupons that are (or are about to be) locked."""
+    return {c["tier"]: {l["game_id"] for l in c["legs"]}
+            for c in load_coupons() if c["date"] == date and _is_locked(c, started_ids)}
+
+
 def save_coupons(date: str, day: dict, started_ids: set[str]) -> list[dict]:
     """
     Replace the date's unlocked coupons with today's build; locked ones are kept

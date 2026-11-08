@@ -357,7 +357,7 @@ def test_coupon_endpoints_and_report_card(tmp_path, monkeypatch):
     assert client.get("/api/coupons/today").json()["coupons"] == []
 
     day = str(nba_today())
-    preds = [pred(f"G{i}", m) for i, m in enumerate([9.0, -8.0, 7.0])]
+    preds = [pred(f"G{i}", m) for i, m in enumerate([14.0, -13.0, 9.0, -8.0, 4.5, -4.0])]
     built = build_coupons(preds, DIST)
     today = coupon_tracker.save_coupons(day, built, set())
     coupon_tracker.write_live_view(day, built, today)
@@ -366,7 +366,7 @@ def test_coupon_endpoints_and_report_card(tmp_path, monkeypatch):
     safe = data["coupons"][0]
     assert safe["id"] == f"{day}:guvenli" and safe["minOdds"] >= safe["fairOdds"]
     assert {"label", "p", "fairOdds", "minOdds", "gameId"} <= set(safe["legs"][0])
-    assert data["nLegs"] == 3 and data["games"][0]["reasons"]
+    assert data["nLegs"] == 2 and data["games"][0]["reasons"]
 
     # Record the odds played: locks the coupon and shows up in today's view
     r = client.post(f"/api/coupons/{day}:guvenli/played-odds", json={"odds": 3.25})
@@ -378,13 +378,13 @@ def test_coupon_endpoints_and_report_card(tmp_path, monkeypatch):
     # Games finish → coupons settle → report card counts them
     prediction_tracker.save_predictions(preds)
     prediction_tracker.fill_results(pd.DataFrame({
-        "game_id": ["G0", "G1", "G2"], "target": [1, 0, 1],
-        "pts_home": [130, 90, 120], "pts_away": [100, 125, 100],
+        "game_id": [f"G{i}" for i in range(6)], "target": [1, 0, 1, 0, 1, 0],
+        "pts_home": [130, 90, 120, 95, 110, 100], "pts_away": [100, 125, 100, 110, 100, 112],
     }))
     card = client.get("/api/report-card").json()
     tiers = {t["tier"]: t for t in card["coupons"]["tiers"]}
     assert tiers["guvenli"]["n"] == 1 and tiers["guvenli"]["won"] == 1
     assert tiers["guvenli"]["profit"] == pytest.approx(2.25)
-    assert card["side"]["n"] == 3 and card["handicap"]["calibration"]["n"] == 27
+    assert card["side"]["n"] == 6 and card["handicap"]["calibration"]["n"] == 54
     assert [c["tier"] for c in card["recentCoupons"]] == ["guvenli", "dengeli", "riskli"]
     assert card["recentCoupons"][0]["legs"][0]["won"] is True

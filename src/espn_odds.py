@@ -9,8 +9,9 @@ Sign convention: ESPN's `spread` is the HOME team's handicap ("CHI +9.5" →
 
 Sources:
   - today / upcoming games: the scoreboard (`competitions[0].odds[0]`)
-  - past games: the scoreboard no longer carries odds, so the event summary's
-    `pickcenter` is used (one request per game, cached, resumable)
+  - past games: the scoreboard no longer carries odds, so the core API's
+    per-event odds are used (DraftKings, or ESPN BET before ~Dec 2025), with
+    the event summary's `pickcenter` as a fallback (cached, resumable)
 
 Output:
   data/processed/market_lines.parquet  (one row per game_id, upserted)
@@ -28,6 +29,7 @@ import json
 import re
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 
@@ -41,9 +43,14 @@ ESPN_CACHE = ROOT / "data" / "api_cache" / "espn"
 BASE_URL       = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 SCOREBOARD_URL = BASE_URL + "/scoreboard?dates={ymd}"
 SUMMARY_URL    = BASE_URL + "/summary?event={event_id}"
+# Per-provider odds of an event. Until ~Dec 2025 ESPN's provider was ESPN BET,
+# whose lines only live here (the summary's pickcenter is empty for them).
+CORE_ODDS_URL  = ("https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
+                  "/events/{event_id}/competitions/{event_id}/odds")
 
-REQUEST_PAUSE = 0.35   # seconds between uncached requests
-RETRIES       = 3
+REQUEST_PAUSE     = 0.35   # seconds between uncached requests (per worker)
+RETRIES           = 3
+PARALLEL_REQUESTS = 6      # backfill: concurrent requests within one day
 
 # ESPN abbreviations that differ from NBA tricodes; the rest are identical.
 ESPN_TO_NBA: dict[str, str] = {
@@ -135,6 +142,14 @@ def _num(value) -> float | None:
     return float(m.group()) if m else None
 
 
+def _first_num(*values) -> float | None:
+    for v in values:
+        n = _num(v)
+        if n is not None:
+            return n
+    return None
+
+
 def _get(d: dict, *keys):
     for k in keys:
         if not isinstance(d, dict):
@@ -185,15 +200,21 @@ def parse_odds_entry(entry: dict | None) -> dict | None:
         "ml_home":          ml_home,
         "ml_away":          ml_away,
         "p_home_novig":     no_vig_home_prob(ml_home, ml_away),
-        "spread_home_open": _num(_get(entry, "pointSpread", "home", "open", "line")),
-        "total_open":       _num(_get(entry, "total", "over", "open", "line")),
+        "spread_home_open": _first_num(_get(entry, "pointSpread", "home", "open", "line"),
+                                       _get(entry, "homeTeamOdds", "open", "pointSpread", "american")),
+        "total_open":       _first_num(_get(entry, "total", "over", "open", "line"),
+                                       _get(entry, "open", "total", "american")),
         "provider":         _get(entry, "provider", "name") or "",
     }
 
 
 def pick_entry(entries: list | None) -> dict | None:
-    """Prefer DraftKings, otherwise the highest-priority provider with a line."""
-    entries = [e for e in (entries or []) if parse_odds_entry(e)]
+    """
+    Prefer DraftKings, otherwise the highest-priority provider with a line.
+    In-game feeds ("ESPN Bet - Live Odds") are not pre-game lines and are skipped.
+    """
+    entries = [e for e in (entries or [])
+               if parse_odds_entry(e) and "live" not in (_get(e, "provider", "name") or "").lower()]
     if not entries:
         return None
     for e in entries:
@@ -293,6 +314,20 @@ def fetch_pickcenter(event_id: str, cache_dir: Path = ESPN_CACHE) -> list:
     return pickcenter
 
 
+def fetch_core_odds(event_id: str, cache_dir: Path = ESPN_CACHE) -> list:
+    """Core API odds items of a finished game (small response, cached)."""
+    path = cache_dir / "core" / f"{event_id}.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8")).get("items", [])
+    data = _get_json(CORE_ODDS_URL.format(event_id=event_id))
+    time.sleep(REQUEST_PAUSE)
+    items = [{k: v for k, v in _strip_links(i).items() if k not in ("propBets", "$ref")}
+             for i in data.get("items") or []]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"items": items}), encoding="utf-8")
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
@@ -374,14 +409,24 @@ def master_index(master: pd.DataFrame) -> dict[tuple, str]:
 def backfill_day(day: date, index: dict[tuple, str],
                  cache_dir: Path = ESPN_CACHE) -> tuple[list[dict], int, int]:
     """Lines of one finished day. Returns (rows, matched games, games without a line)."""
-    rows, matched, missing = [], 0, 0
+    games = []
     for ev in parse_scoreboard(fetch_scoreboard(day, cache=True, cache_dir=cache_dir)):
         gid = index.get((day, canon_abbr(ev["home_team_abbr"]), canon_abbr(ev["away_team_abbr"])))
-        if gid is None or ev["status"] not in FINAL_STATUSES:
-            continue   # All-Star / exhibition / postponed — not in master_games
-        matched += 1
+        if gid is not None and ev["status"] in FINAL_STATUSES:
+            games.append((gid, ev))   # others: All-Star / exhibition / postponed
+
+    # A request takes ~1 s, so the day's games are fetched in parallel
+    need_core = [ev["event_id"] for _, ev in games if ev["odds"] is None]
+    with ThreadPoolExecutor(max_workers=PARALLEL_REQUESTS) as pool:
+        core = dict(zip(need_core, pool.map(lambda eid: fetch_core_odds(eid, cache_dir), need_core)))
+
+    rows, matched, missing = [], len(games), 0
+    for gid, ev in games:
         odds, source = ev["odds"], "scoreboard"
         if odds is None:
+            odds = parse_odds_entry(pick_entry(core[ev["event_id"]]))
+            source = "core"
+        if odds is None:   # the large summary only as a last resort
             odds = parse_odds_entry(pick_entry(fetch_pickcenter(ev["event_id"], cache_dir)))
             source = "summary"
         if odds is None:

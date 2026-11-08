@@ -61,6 +61,24 @@ PICKCENTER_ORL = {
 }
 
 
+# Core API odds items of event 401809234 (CLE @ NYK, Oct 2025), trimmed:
+# the pre-game ESPN BET line plus an in-game feed that must be ignored.
+CORE_ESPN_BET = {
+    "provider": {"id": "58", "name": "ESPN BET", "priority": 0},
+    "details": "CLE -1.5", "overUnder": 228.5, "spread": 1.5,
+    "overOdds": -115.0, "underOdds": -105.0,
+    "homeTeamOdds": {"moneyLine": 100, "spreadOdds": -110.0,
+                     "open": {"pointSpread": {"american": "-3.5"}}},
+    "awayTeamOdds": {"moneyLine": -120, "spreadOdds": -110.0,
+                     "open": {"pointSpread": {"american": "+3.5"}}},
+    "open": {"total": {"american": "230.5"}},
+}
+CORE_LIVE = {
+    "provider": {"id": "59", "name": "ESPN Bet - Live Odds", "priority": 0},
+    "details": "NY -6.5", "overUnder": 229.5, "spread": -6.5,
+}
+
+
 def event(eid, home, away, odds=None, status="STATUS_SCHEDULED"):
     return {"id": eid, "competitions": [{
         "status": {"type": {"name": status}},
@@ -117,6 +135,17 @@ def test_pickcenter_shape():
     assert o["spread_odds_home"] == -108 and o["spread_odds_away"] == -112
     assert o["over_odds"] == -108 and o["under_odds"] == -112
     assert o["spread_home_open"] is None
+
+
+def test_core_item_shape_and_live_feed_skipped():
+    chosen = pick_entry([CORE_LIVE, CORE_ESPN_BET])
+    assert chosen["provider"]["name"] == "ESPN BET"
+    o = parse_odds_entry(chosen)
+    assert o["spread_home"] == 1.5 and o["market_margin"] == -1.5 and o["total"] == 228.5
+    assert o["ml_home"] == 100 and o["ml_away"] == -120
+    assert o["over_odds"] == -115 and o["spread_odds_home"] == -110
+    assert o["spread_home_open"] == -3.5 and o["total_open"] == 230.5
+    assert pick_entry([CORE_LIVE]) is None
 
 
 def test_missing_odds():
@@ -205,8 +234,12 @@ def test_backfill_matches_master_and_resumes(tmp_path, monkeypatch):
                                 event("999", "WORLD", "USA", status="STATUS_FINAL")]},  # not in master
         "20260116": {"events": [event("401810440", "GS", "LAL", status="STATUS_FINAL")]},
     }
+    core = {
+        "401810433": {"items": [CORE_LIVE, PICKCENTER_ORL]},
+        "401810434": {"items": []},
+        "401810440": {"items": [CORE_LIVE]},             # only an in-game feed
+    }
     summaries = {
-        "401810433": {"pickcenter": [PICKCENTER_ORL]},
         "401810434": {"pickcenter": []},                 # ESPN has no line for this game
         "401810440": {"pickcenter": [dict(PICKCENTER_ORL, spread=-3.0, overUnder=231.0)]},
     }
@@ -216,6 +249,8 @@ def test_backfill_matches_master_and_resumes(tmp_path, monkeypatch):
         calls.append(url)
         if "scoreboard" in url:
             return boards[url.rsplit("=", 1)[1]]
+        if "sports.core" in url:
+            return core[url.split("/events/")[1].split("/")[0]]
         return summaries[url.rsplit("=", 1)[1]]
 
     monkeypatch.setattr(espn_odds, "_get_json", fake_get)
@@ -225,9 +260,10 @@ def test_backfill_matches_master_and_resumes(tmp_path, monkeypatch):
     lines = table.set_index("game_id")
     assert set(lines.index) == {"0022500001", "0022500003"}
     assert lines.loc["0022500001", "market_margin"] == 5.5
+    assert lines.loc["0022500001", "source"] == "core"
     assert lines.loc["0022500003", "spread_home"] == -3.0
     assert lines.loc["0022500003", "source"] == "summary"
-    assert len(calls) == 5                    # 2 scoreboards + 3 summaries
+    assert len(calls) == 7                    # 2 scoreboards + 3 core + 2 summaries
 
     # Second run is served entirely from the cache
     calls.clear()

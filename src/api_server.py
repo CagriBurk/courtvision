@@ -407,7 +407,8 @@ def _build_game_response(
         'awayInjuries':   (injuries or {}).get(a_abbr, []),
         'homeTopPlayers': (top_players or {}).get(h_tid, []),
         'awayTopPlayers': (top_players or {}).get(a_tid, []),
-        'lines':          _lines_response(row.get('lines'), line_quality),
+        'lines':          _lines_response(row.get('lines'), line_quality, row.get('market')),
+        'probHomeMarket': _opt_num(row.get('prob_home_market')),
     }
 
 
@@ -442,18 +443,45 @@ def _line_quality() -> dict:
     return out
 
 
-def _lines_response(raw: str | None, quality: dict | None = None) -> dict | None:
-    """lines JSON of one game → frontend GameLines (camelCase, fair odds = 1 / p)."""
+def _market_response(raw) -> dict | None:
+    """market JSON of one game (05 / market_blend) → frontend MarketView."""
+    if not raw or not isinstance(raw, str):
+        return None
+    m = json.loads(raw)
+    return {
+        "provider":        m.get("provider") or "",
+        "spreadHome":      m.get("spread_home"),
+        "marketMargin":    m.get("market_margin"),
+        "marketTotal":     m.get("market_total"),
+        "pHome":           m.get("p_home"),
+        "source":          m.get("source") or {},
+        "w":               m.get("w") or {},
+        "modelMargin":     m.get("model_margin"),
+        "modelTotal":      m.get("model_total"),
+        "modelFairMargin": m.get("model_fair_margin"),
+        "modelFairTotal":  m.get("model_fair_total"),
+    }
+
+
+def _lines_response(raw: str | None, quality: dict | None = None, market_raw=None) -> dict | None:
+    """
+    lines JSON of one game → frontend GameLines (camelCase, fair odds = 1 / p).
+    Each market says whether it is priced around the market line or by the
+    model; the low-signal warning only applies to model-priced lines.
+    """
     if not raw:
         return None
     lines = json.loads(raw)
     quality = quality or {}
+    market = _market_response(market_raw)
+    source = (market or {}).get("source") or {}
 
     def ladder(rows):
         return [{"line": r["line"], "pOver": r["p_over"]} for r in rows]
 
-    out = {"projected": lines.get("projected"), "scores": lines.get("scores")}
+    out = {"projected": lines.get("projected"), "scores": lines.get("scores"), "market": market}
     m = lines.get("margin")
+    m_src = source.get("margin", "model")
     out["spread"] = None if not m else {
         "pred":      m["pred"],
         "sigma":     m["sigma"],
@@ -461,15 +489,18 @@ def _lines_response(raw: str | None, quality: dict | None = None) -> dict | None
         "pHomeWin":  m["p_home_win"],
         "ladder":    ladder(m["ladder"]),
         "bands":     m["bands"],
-        "lowSignal": bool(quality.get("margin", {}).get("lowSignal", False)),
+        "source":    m_src,
+        "lowSignal": m_src == "model" and bool(quality.get("margin", {}).get("lowSignal", False)),
     }
     t = lines.get("total")
+    t_src = source.get("total", "model")
     out["total"] = None if not t else {
         "pred":      t["pred"],
         "sigma":     t["sigma"],
         "fairLine":  t["fair_line"],
         "ladder":    ladder(t["ladder"]),
-        "lowSignal": bool(quality.get("total", {}).get("lowSignal", False)),
+        "source":    t_src,
+        "lowSignal": t_src == "model" and bool(quality.get("total", {}).get("lowSignal", False)),
         "baseline":  quality.get("total", {}).get("baseline"),
     }
     return out

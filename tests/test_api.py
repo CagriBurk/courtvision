@@ -300,8 +300,23 @@ def test_game_lines_and_low_signal_label(tmp_path, monkeypatch):
     assert lines["total"]["lowSignal"] is True and lines["total"]["baseline"] == "taban"
     assert lines["projected"]["away"] > lines["projected"]["home"]
 
+    assert lines["market"] is None and lines["spread"]["source"] == "model"
+
     # Games predicted without the new models have no lines
     assert api_server._build_game_response({**row, "lines": None})["lines"] is None
+
+    # Market-priced lines: the market view is passed on, no low-signal warning
+    market = {"provider": "DraftKings", "spread_home": 8.5, "market_margin": -8.5, "market_total": 228.5,
+              "p_home": 0.24, "source": {"margin": "market", "total": "market"},
+              "w": {"margin": 0.0, "total": 0.0}, "model_margin": -10.0, "model_total": 226.4,
+              "model_fair_margin": -9.5, "model_fair_total": 226.5}
+    game = api_server._build_game_response(
+        {**row, "market": json.dumps(market), "prob_home_market": 0.24}, line_quality=quality)
+    lines = game["lines"]
+    assert game["probHomeMarket"] == 0.24
+    assert lines["market"]["provider"] == "DraftKings" and lines["market"]["marketMargin"] == -8.5
+    assert lines["market"]["modelFairMargin"] == -9.5 and lines["market"]["w"]["margin"] == 0.0
+    assert lines["total"]["source"] == "market" and lines["total"]["lowSignal"] is False
 
 
 def test_history_and_metrics_include_lines(tmp_path, monkeypatch):

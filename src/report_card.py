@@ -8,6 +8,7 @@ The "karne" (Faz 6): how often what the model promised actually happened.
             winning-margin bands
   total     every priced over/under line (tracked only; not used in coupons)
   coupons   by tier: hit rate vs promised probability, legs, optional profit
+  market    live model vs market (closing line) on the same games (6b)
 
 Calibration rows answer "of the picks we gave ~70%, how many came in?".
 Every line is read from the side the model favours (p >= 50%), so a 30%
@@ -155,6 +156,56 @@ def coupon_report(coupons: list[dict]) -> dict:
     }
 
 
+MIN_GAMES_FOR_W = 30   # canlı w ancak bu kadar maçtan sonra anlamlı
+
+
+def market_vs_model(log: pd.DataFrame) -> dict:
+    """
+    Live head-to-head on finished games that had a market line (6b): the
+    model's own centre vs the market's line (margin, total) and the model's
+    win probability vs the no-vig market one. `w` is the live blend weight
+    (actual ≈ market + w·(model − market)), the number 09 measured on the
+    past; it only means something after a few hundred games.
+    """
+    from market_eval import blend_weight, log_loss
+
+    done = _settled(log)
+    out = {}
+    for task, model_col, market_col in (("margin", "model_margin_center", "market_margin"),
+                                         ("total", "model_total_center", "market_total")):
+        if model_col not in done.columns or market_col not in done.columns:
+            out[task] = {"n": 0}
+            continue
+        g = done[done[model_col].notna() & done[market_col].notna()]
+        y = (g["actual_home_pts"] - g["actual_away_pts"] if task == "margin"
+             else g["actual_home_pts"] + g["actual_away_pts"]).astype(float)
+        model, market = g[model_col].astype(float), g[market_col].astype(float)
+        row = {"n": int(len(g))}
+        if len(g):
+            row["model_mae"] = float((y - model).abs().mean())
+            row["market_mae"] = float((y - market).abs().mean())
+            row["model_closer"] = float(((y - model).abs() < (y - market).abs()).mean())
+        if len(g) >= MIN_GAMES_FOR_W:
+            w = blend_weight(y, market, model)
+            row["w"], row["w_se"] = w["w"], w["se"]
+        out[task] = row
+
+    win = {"n": 0}
+    if "prob_home_market" in done.columns:
+        g = done[done["prob_home_market"].notna() & done["prob_home"].notna()]
+        if len(g):
+            y = (g["actual_home_pts"] > g["actual_away_pts"]).astype(float)
+            pm, pmod = g["prob_home_market"].astype(float), g["prob_home"].astype(float)
+            win = {
+                "n": int(len(g)),
+                "model_logloss": log_loss(y, pmod), "market_logloss": log_loss(y, pm),
+                "model_acc": float(((pmod > 0.5) == (y > 0.5)).mean()),
+                "market_acc": float(((pm > 0.5) == (y > 0.5)).mean()),
+            }
+    out["winner"] = win
+    return out
+
+
 def build_report_card(pred_log: pd.DataFrame | None, coupons: list[dict]) -> dict:
     """Everything the Karne page shows."""
     from prediction_tracker import line_report
@@ -174,4 +225,5 @@ def build_report_card(pred_log: pd.DataFrame | None, coupons: list[dict]) -> dic
             "error": errors.get("total"),
         },
         "coupons": coupon_report(coupons),
+        "market": market_vs_model(log) if has else market_vs_model(pd.DataFrame()),
     }

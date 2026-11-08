@@ -95,3 +95,34 @@ def test_empty_inputs():
     old = pd.DataFrame([{"game_id": "G1", "prob_home": 0.6, "correct": True}])  # pre-Faz 5 log
     card = build_report_card(old, [])
     assert card["side"]["n"] == 1 and card["handicap"]["calibration"]["n"] == 0
+
+
+def test_market_vs_model_live():
+    from report_card import market_vs_model
+
+    rng = np.random.default_rng(1)
+    n = 200
+    truth = rng.normal(0, 7, n)
+    market = truth + rng.normal(0, 1.5, n)            # the market is closer to the truth
+    model = truth + rng.normal(0, 4, n)
+    margin = np.round(truth + rng.normal(0, 12, n))
+    margin[margin == 0] = 1
+    total = np.round(225 + rng.normal(0, 18, n))
+    log = pd.DataFrame({
+        "game_id": [f"G{i}" for i in range(n)],
+        "prob_home": 1 / (1 + np.exp(-model / 6)), "prob_home_market": 1 / (1 + np.exp(-market / 6)),
+        "model_margin_center": model, "market_margin": market,
+        "model_total_center": 225 + rng.normal(0, 6, n), "market_total": np.full(n, 225.0),
+        "actual_home_pts": (total + margin) / 2, "actual_away_pts": (total - margin) / 2,
+    })
+    log.loc[:9, "market_margin"] = np.nan                # games without a line are skipped
+    r = market_vs_model(log)
+    assert r["margin"]["n"] == n - 10 and r["total"]["n"] == n
+    assert r["margin"]["market_mae"] < r["margin"]["model_mae"]
+    assert 0 <= r["margin"]["model_closer"] <= 1 and "w" in r["margin"]
+    assert r["winner"]["n"] == n and r["winner"]["market_logloss"] < 0.7
+
+    few = market_vs_model(log.iloc[:20])
+    assert few["margin"]["n"] == 10 and "w" not in few["margin"]   # too few games for w
+    assert market_vs_model(pd.DataFrame({"game_id": ["X"]}))["margin"] == {"n": 0}
+    assert build_report_card(log, [])["market"]["margin"]["n"] == n - 10

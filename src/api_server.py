@@ -942,7 +942,7 @@ async def report_card(days: int = 30):
     log = pd.read_parquet(pred_path) if pred_path.exists() else None
     coupons = load_coupons(_coupon_log_path())
     card = build_report_card(log, coupons)
-    tier_order = {"guvenli": 0, "dengeli": 1, "riskli": 2}
+    tier_order = {"guvenli": 0, "dengeli": 1, "riskli": 2, "ust": 3}
     cutoff = str((pd.Timestamp(nba_today()) - pd.Timedelta(days=days)).date())
     card["recent_coupons"] = sorted(
         (c for c in coupons if c["date"] >= cutoff),

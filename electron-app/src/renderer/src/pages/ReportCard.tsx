@@ -195,7 +195,7 @@ export default function ReportCard({ apiBase }: { apiBase: string }): ReactEleme
                   title="Kupon seviyeleri"
                   sub="Tutma oranı, kuponun kurulduğu andaki olasılıkla karşılaştırılır."
                 >
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-4 gap-3">
                     {c.tiers.map((t) => (
                       <div
                         key={t.tier}
@@ -232,7 +232,7 @@ export default function ReportCard({ apiBase }: { apiBase: string }): ReactEleme
 
                 {data.recentCoupons.length > 0 && (
                   <Section title="Son kuponlar" sub="Son 30 gün">
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 2xl:grid-cols-4 gap-3">
                       {data.recentCoupons.map((cp) => (
                         <CouponCard key={cp.id} coupon={cp} compact />
                       ))}

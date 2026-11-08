@@ -19,14 +19,21 @@ const tierStyle: Record<Coupon['tier'], { ring: string; text: string; chip: stri
     ring: 'border-orange-500/30',
     text: 'text-orange-400',
     chip: 'bg-orange-500/10 text-orange-300 border-orange-500/30'
+  },
+  ust: {
+    ring: 'border-violet-500/30',
+    text: 'text-violet-400',
+    chip: 'bg-violet-500/10 text-violet-300 border-violet-500/30'
   }
 }
 
 const pct = (p: number): string => `%${Math.round(p * 100)}`
 
 function LegRow({ leg }: { leg: CouponLeg }): ReactElement {
-  const opponent = leg.team === leg.home ? leg.away : leg.home
-  const where = leg.team === leg.home ? 'evinde' : 'deplasmanda'
+  const matchup =
+    leg.market === 'total' || !leg.team
+      ? `${leg.away} @ ${leg.home}`
+      : `${leg.team === leg.home ? leg.away : leg.home} karşısında ${leg.team === leg.home ? 'evinde' : 'deplasmanda'}`
   const tip = formatTipoff(leg.gameTimeUtc)
   return (
     <div className="flex items-center gap-2 py-1.5 border-b border-slate-700/40 last:border-0">
@@ -35,9 +42,19 @@ function LegRow({ leg }: { leg: CouponLeg }): ReactElement {
         {leg.won === false && <XCircle size={14} className="text-red-400" />}
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-white text-sm font-semibold">{leg.label}</p>
+        <p className="text-white text-sm font-semibold">
+          {leg.label}
+          {leg.fair && (
+            <span
+              className="text-slate-500 text-[10px] font-normal ml-1.5"
+              title="Modelin %50 gördüğü çizgi. iddaa'nın baremleri bundan 4+ sayı uzaksa piyasa farklı düşünüyor: ayağı çıkar."
+            >
+              adil {leg.fair}
+            </span>
+          )}
+        </p>
         <p className="text-slate-500 text-[10px] truncate">
-          {opponent} karşısında {where}
+          {matchup}
           {tip && ` · ${tip}`}
           {leg.score && ` · ${leg.score[0]}-${leg.score[1]}`}
         </p>
@@ -150,6 +167,14 @@ export default function CouponCard({
           >
             {coupon.label} · ayak başı ≈ {pct(coupon.target)}
           </span>
+          {coupon.experimental && (
+            <span
+              className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400"
+              title="Toplam modeli son 10 maç ortalamasından iyi değil; karnede ayrı takip ediliyor"
+            >
+              tahmin gücü düşük
+            </span>
+          )}
           {compact && <p className="text-slate-500 text-[10px] mt-1">{coupon.date}</p>}
         </div>
         <div className="flex items-center gap-1.5 text-[10px]">

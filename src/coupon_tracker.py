@@ -127,8 +127,8 @@ def set_played_odds(coupon_id: str, odds: float | None, path: Path | None = None
     for c in log:
         if c["id"] == coupon_id:
             c["played_odds"] = None if odds is None else round(float(odds), 2)
-            if odds is not None:
-                c["locked"] = True
+            # Oran kaydı kilitler; silmek kilidi açar (maç başladıysa 05 yeniden kilitler)
+            c["locked"] = odds is not None or bool(c.get("result"))
             _save(log, path)
             return c
     raise KeyError(coupon_id)
@@ -142,6 +142,7 @@ def write_live_view(date: str, day: dict, coupons_today: list[dict]) -> None:
         "generated_at": _now(),
         "n_legs": day.get("n_legs", 0),
         "note": day.get("note"),
+        "skipped": day.get("skipped", []),
         "games": day.get("games", []),
         "coupons": coupons_today,
     }

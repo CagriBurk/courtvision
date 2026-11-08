@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, CircleSlash, Info, Ticket } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleSlash, Info, Ticket } from 'lucide-react'
 import CouponCard from '../components/CouponCard'
 import { CouponGame, CouponsToday } from '../types'
 
@@ -17,10 +17,12 @@ function GameRow({ g }: { g: CouponGame }): ReactElement {
       <span className="w-28 text-slate-200 font-medium">
         {g.away} @ {g.home}
       </span>
-      <span className="w-24 text-slate-400">
-        favori <span className="text-white font-semibold">{g.favourite}</span>
+      <span className="w-28 text-slate-400" title="Modelin adil handikabı (%50)">
+        adil <span className="text-white font-semibold">{g.fairLabel}</span>
       </span>
-      <span className="w-20 text-slate-400 tabular-nums">{Math.abs(g.center).toFixed(1)} sayı</span>
+      <span className="w-20 text-slate-400 tabular-nums" title="Modelin adil toplamı">
+        {g.fairTotal != null ? `toplam ${g.fairTotal.toFixed(1)}` : ''}
+      </span>
       <span
         className="w-28 text-slate-500 tabular-nums"
         title="Kazanan modeli / fark modeli: ev sahibinin kazanma olasılığı"
@@ -74,7 +76,7 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
           Günün Kuponları
         </h1>
         <p className="text-slate-500 text-sm mt-0.5">
-          {data?.date ?? '—'} · yalnızca handikap · maç başına tek seçim
+          {data?.date ?? '—'} · favori handikap verir · maç başına tek seçim
         </p>
       </div>
 
@@ -89,6 +91,27 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
             karneye o haliyle geçer.
           </p>
         </div>
+        <div className="flex gap-2 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 text-[12px] text-amber-100/80">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-400" />
+          <p>
+            <span className="text-white font-semibold">Piyasa kontrolü:</span> her ayağın yanında
+            modelin <span className="text-white font-semibold">adil</span> çizgisi yazar. iddaa’nın
+            o maç için açtığı baremler adil çizgiden 4 sayıdan fazla uzaksa (ör. adil MIA -3.5,
+            iddaa en düşük MIA -7.5) piyasa modelin bilmediği bir şey biliyor olabilir: sakatlık,
+            dinlenme. O ayağı kupondan çıkar.
+          </p>
+        </div>
+
+        {(data?.skipped ?? []).length > 0 && (
+          <div className="text-[11px] text-slate-500 space-y-0.5">
+            {data!.skipped!.map((s) => (
+              <p key={s.tier}>
+                <span className="text-slate-400 font-medium">{s.label} kupon bugün yok:</span>{' '}
+                {s.reason}.
+              </p>
+            ))}
+          </div>
+        )}
 
         {isLoading && <p className="text-slate-500 text-sm">Yükleniyor…</p>}
         {isError && <p className="text-slate-500 text-sm">API bağlantısı yok.</p>}
@@ -100,7 +123,7 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
         )}
 
         {coupons.length > 0 && (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 2xl:grid-cols-4 gap-4">
             {coupons.map((c) => (
               <CouponCard key={c.id} coupon={c} onSaveOdds={saveOdds(c.id)} />
             ))}

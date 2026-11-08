@@ -276,8 +276,14 @@ python src/04_evaluate_model.py
 
 **Kuponlar sayfası** her tahmin güncellemesinde yeniden kurulur:
 
-- Üç kupon: **Güvenli** (ayak başı ≈%72), **Dengeli** (≈%62), **Riskli** (≈%54). Yalnızca
-  handikap; taraf (maç sonucu) ve alt/üst kuponlara girmez.
+- Üç handikap kuponu: **Güvenli** (ayak başı %68-80), **Dengeli** (%58-68), **Riskli** (%50-58).
+  Favori her zaman **handikap verir** (-1.5 ve üstü; artı handikap yok). Hafif favoriler bu yüzden
+  güvenli kupona giremez; o gün güvenli seviyeye giren 2 maç yoksa güvenli kupon kurulmaz.
+- Ek olarak **Üst (deneysel)** kuponu: aynı maçlarda ≈%62'lik üst baremleri. Toplam modeli basit
+  ortalamayı geçemediği için karnede ayrı seviye olarak izlenir. Taraf (maç sonucu) kuponlara girmez.
+- **Piyasa kontrolü:** her ayağın yanında modelin **adil** çizgisi yazar. iddaa'nın o maç için açtığı
+  baremler adil çizgiden 4 sayıdan fazla uzaksa (ör. adil MIA -3.5, iddaa en düşük MIA -7.5) piyasa
+  modelin bilmediği bir şey biliyor olabilir (sakatlık, dinlenme); o ayağı çıkar.
 - Maç seçimi: başlamamış, iki takımı da sezonda en az 5 maç oynamış, kazanan modeli ile fark
   modelinin aynı tarafı benzer olasılıkla gösterdiği maçlar. Ayak sayısı güçlü maç sayısına
   göre 2-4. Sayfanın altındaki "Maç seçimi" tablosu her maçın neden seçildiğini ya da elendiğini yazar.
@@ -286,6 +292,7 @@ python src/04_evaluate_model.py
 - **Kilit:** kupon, içindeki bir maç başlayınca ya da oynadığın toplam oranı kaydedince kilitlenir;
   karneye o haliyle geçer. Kilitlenmemiş kuponlar sonraki güncellemede değişebilir (sakatlık haberi).
 - Oranı kaydetmek isteğe bağlıdır; kaydettiklerin için karnede kâr/zarar ve ROI hesaplanır.
+  Yanlış girdiysen "temizle" ile sil; kupon, maçları başlamadıysa yeniden güncellenebilir olur.
 
 **Karne sayfası** "model ne vaat etti, ne gerçekleşti" sorusunu cevaplar:
 

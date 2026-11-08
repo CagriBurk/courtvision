@@ -62,29 +62,65 @@ def test_game_filters():
 
 
 def test_build_coupons_uses_reliable_games_only():
-    preds = [pred(f"S{i}", m) for i, m in enumerate([9.0, -7.5, 6.0])]  # 3 strong
-    preds += [pred("W1", 1.5), pred("X1", 8.0, p_clf=0.4)]               # weak, contradicting
+    preds = [pred(f"S{i}", m) for i, m in enumerate([12.0, -11.0, 9.5])]  # 3 strong, big favourites
+    preds += [pred("W1", 1.5), pred("X1", 8.0, p_clf=0.4)]                # weak, contradicting
     out = build_coupons(preds, DIST)
     assert out["n_legs"] == 3
     assert [c["tier"] for c in out["coupons"]] == [t["key"] for t in TIERS]
     for c in out["coupons"]:
+        tier = next(t for t in TIERS if t["key"] == c["tier"])
         ids = [l["game_id"] for l in c["legs"]]
-        assert sorted(ids) == ["S0", "S1", "S2"] and len(set(ids)) == len(ids)
+        assert set(ids) <= {"S0", "S1", "S2"} and len(set(ids)) == len(ids)
         assert c["p"] == pytest.approx(np.prod([l["p"] for l in c["legs"]]), abs=1e-3)
         assert c["min_odds"] >= c["fair_odds"] * 1.05 ** len(c["legs"]) - 0.02
         for l in c["legs"]:
-            assert abs(l["p"] - c["target"]) < 0.03
+            assert tier["lo"] <= l["p"] < tier["hi"]
+            assert l["handicap"] <= -1.5 and l["market"] == "spread"  # the favourite gives points
+            assert l["fair"].startswith(l["team"])
     safe, risky = out["coupons"][0], out["coupons"][-1]
     assert safe["p"] > risky["p"] and safe["fair_odds"] < risky["fair_odds"]
     # The away favourite's leg is labelled from the away side
     s1 = next(l for l in safe["legs"] if l["game_id"] == "S1")
-    assert s1["team"] == "AWY" and s1["side"] == "away"
+    assert s1["team"] == "AWY" and s1["side"] == "away" and s1["label"].startswith("AWY -")
+
+
+def test_slight_favourite_never_receives_points():
+    """A 3-4 point favourite would need +points to reach ~72%: it stays out of the safe coupon."""
+    preds = [pred("MIA", 4.0, home="MIA", away="CHI"), pred("BIG", 12.0), pred("BIG2", -11.5)]
+    out = build_coupons(preds, DIST)
+    tiers = {c["tier"]: c for c in out["coupons"]}
+    assert "MIA" not in [l["game_id"] for l in tiers["guvenli"]["legs"]]
+    mia = [l for c in out["coupons"] for l in c["legs"] if l["game_id"] == "MIA"]
+    assert mia and all(l["handicap"] <= -1.5 for l in mia)
+    # Two slight favourites only: no safe coupon at all, with the reason
+    out = build_coupons([pred("A", 4.0), pred("B", -4.5)], DIST)
+    assert "guvenli" not in [c["tier"] for c in out["coupons"]]
+    assert out["skipped"][0]["tier"] == "guvenli" and "aralığına" in out["skipped"][0]["reason"]
+
+
+def test_over_coupon_is_experimental():
+    total = {"task": "total", "shape": "normal", "sigma": {"kind": "const", "value": 18.8}, "no_tie": False}
+    preds = []
+    for i, m in enumerate([12.0, -11.0, 9.5]):
+        p = pred(f"S{i}", m)
+        lines = game_lines({"margin": DIST, "total": total}, m, 226.0 + i)
+        preds.append({**p, "pred_total": 226.0 + i, "lines": json.dumps(lines)})
+    out = build_coupons(preds, DIST, total)
+    over = out["coupons"][-1]
+    assert over["tier"] == "ust" and over["experimental"] is True
+    for l in over["legs"]:
+        assert l["market"] == "total" and l["label"].startswith("Üst ")
+        assert 0.58 <= l["p"] < 0.68 and l["line"] < 226.0 + 2  # over a line below the projection
+    assert leg_won({"market": "total", "side": "over", "line": 220.5}, 112, 110)
+    assert not leg_won({"market": "total", "side": "over", "line": 220.5}, 110, 110)
+    # Without a total distribution there is no over coupon
+    assert "ust" not in [c["tier"] for c in build_coupons(preds, DIST)["coupons"]]
 
 
 def test_leg_count_follows_strong_games():
     many_weak = [pred(f"W{i}", 2.0 + 0.1 * i) for i in range(6)]
     assert build_coupons(many_weak, DIST)["n_legs"] == 2      # busy night, no strong games
-    many_strong = [pred(f"S{i}", 8.0 + i) for i in range(6)]
+    many_strong = [pred(f"S{i}", 9.0 + i) for i in range(6)]
     assert build_coupons(many_strong, DIST)["n_legs"] == 4    # capped
     lonely = build_coupons([pred("S0", 9.0), pred("X", 9.0, p_clf=0.3)], DIST)
     assert lonely["coupons"] == [] and "en az 2" in lonely["note"]

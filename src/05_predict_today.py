@@ -453,7 +453,7 @@ def update_coupons(predictions: list[dict], dists: dict, target_date: date) -> N
     elif not predictions:
         day = {"coupons": [], "games": [], "n_legs": 0, "note": "Bugün programda maç yok."}
     else:
-        day = build_coupons(predictions, dists["margin"])
+        day = build_coupons(predictions, dists["margin"], dists.get("total"))
     started = {str(p["game_id"]) for p in predictions if p.get("game_status", 1) != 1}
     today = coupon_tracker.save_coupons(day_str, day, started) if day["coupons"] or predictions else []
     coupon_tracker.write_live_view(day_str, day, today)

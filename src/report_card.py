@@ -124,7 +124,8 @@ def band_report(log: pd.DataFrame) -> list[dict]:
 def coupon_report(coupons: list[dict]) -> dict:
     settled = [c for c in coupons if c.get("result")]
     tiers = []
-    for key, label in (("guvenli", "Güvenli"), ("dengeli", "Dengeli"), ("riskli", "Riskli")):
+    for key, label in (("guvenli", "Güvenli"), ("dengeli", "Dengeli"), ("riskli", "Riskli"),
+                       ("ust", "Üst (deneysel)")):
         cs = [c for c in settled if c["tier"] == key]
         won = sum(c["result"] == "won" for c in cs)
         legs = [l for c in cs for l in c["legs"] if l.get("won") is not None]

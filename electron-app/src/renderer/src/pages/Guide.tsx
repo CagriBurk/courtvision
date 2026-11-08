@@ -286,9 +286,19 @@ export default function Guide(): ReactElement {
           <Card icon={<Ticket size={15} />} title="Kuponlar">
             <ul className="list-disc pl-5 space-y-1">
               <li>
-                Her gün üç kupon: <B>Güvenli</B> (ayak başı ≈%72), <B>Dengeli</B> (≈%62),{' '}
-                <B>Riskli</B> (≈%54). Hepsi aynı güvenilir maçların favori tarafında, risk arttıkça
-                handikap büyür.
+                Üç handikap kuponu: <B>Güvenli</B> (ayak başı %68-80), <B>Dengeli</B> (%58-68),{' '}
+                <B>Riskli</B> (%50-58). Favori her zaman handikap verir (-1.5 ve üstü); hafif
+                favoriler güvenli kupona giremez. Risk arttıkça handikap büyür.
+              </li>
+              <li>
+                <B>Üst (deneysel)</B> kuponu: aynı maçlarda ≈%62&apos;lik üst baremleri. Toplam
+                modeli zayıf olduğu için karnede ayrı izlenir; karma kupon yapacaksan aynı maçın
+                handikabı ile üstünü birlikte koyma.
+              </li>
+              <li>
+                <B>Piyasa kontrolü:</B> ayağın yanındaki <B>adil</B> çizgiye bak. iddaa&apos;nın
+                baremleri bundan 4+ sayı uzaksa (adil MIA -3.5, iddaa en düşük MIA -7.5) piyasa bir
+                şey biliyor olabilir; o ayağı çıkar.
               </li>
               <li>
                 Sadece iki modelin aynı tarafı benzer olasılıkla gösterdiği maçlar girer; ayak

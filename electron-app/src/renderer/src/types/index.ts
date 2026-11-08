@@ -146,11 +146,13 @@ export interface CouponLeg {
   gameId: string
   home: string
   away: string
-  team: string // seçilen (favori) takım
-  side: 'home' | 'away'
-  line: number // ev farkı çizgisi
-  handicap: number
-  label: string // "LAL -4.5"
+  market: 'spread' | 'total'
+  team: string | null // handikapta seçilen (favori) takım
+  side: 'home' | 'away' | 'over'
+  line: number // handikapta ev farkı, toplamda toplam sayı çizgisi
+  handicap: number | null
+  label: string // "LAL -4.5" / "Üst 222.5"
+  fair: string // adil çizgi: "LAL -3.5" / "228.5"
   p: number
   fairOdds: number
   minOdds: number
@@ -162,9 +164,10 @@ export interface CouponLeg {
 export interface Coupon {
   id: string
   date: string
-  tier: 'guvenli' | 'dengeli' | 'riskli'
+  tier: 'guvenli' | 'dengeli' | 'riskli' | 'ust'
   label: string
   target: number
+  experimental?: boolean // üst kuponu: toplam modeli tabanı geçemiyor
   legs: CouponLeg[]
   p: number
   fairOdds: number
@@ -179,6 +182,8 @@ export interface CouponGame {
   home: string
   away: string
   favourite: string
+  fairLabel: string
+  fairTotal: number | null
   center: number
   pClassifier: number
   pMargin: number
@@ -193,6 +198,7 @@ export interface CouponsToday {
   date: string | null
   nLegs: number
   note: string | null
+  skipped?: { tier: string; label: string; reason: string }[]
   games: CouponGame[]
   coupons: Coupon[]
 }
@@ -231,7 +237,14 @@ export interface ReportCard {
   side: Calibration
   handicap: {
     calibration: Calibration
-    bands: { side: 'home' | 'away'; lo: number; hi: number | null; n: number; pred: number; obs: number }[]
+    bands: {
+      side: 'home' | 'away'
+      lo: number
+      hi: number | null
+      n: number
+      pred: number
+      obs: number
+    }[]
     error: LineStats | null
   }
   total: { calibration: Calibration; error: LineStats | null }

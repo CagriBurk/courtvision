@@ -60,6 +60,19 @@ def test_unlocked_coupons_are_rebuilt_locked_ones_kept(paths):
         coupon_tracker.set_played_odds("2026-11-08:riskli", 0.9)
 
 
+def test_clearing_played_odds_unlocks_until_a_game_starts(paths):
+    _, day = day_of(12.0, -11.0, 9.5)
+    coupon_tracker.save_coupons("2026-11-08", day, set())
+    coupon_tracker.set_played_odds("2026-11-08:guvenli", 3.1)
+    c = coupon_tracker.set_played_odds("2026-11-08:guvenli", None)
+    assert c["played_odds"] is None and c["locked"] is False
+    _, later = day_of(15.0, -11.0, 9.5)
+    rebuilt = {c["tier"]: c for c in coupon_tracker.save_coupons("2026-11-08", later, set())}
+    assert rebuilt["guvenli"]["legs"] != c["legs"]          # unlocked → rebuilt
+    relocked = coupon_tracker.save_coupons("2026-11-08", later, {"G0"})
+    assert all(x["locked"] for x in relocked)               # a game started → locked again
+
+
 def test_coupons_settle_when_scores_arrive(paths):
     preds, day = day_of(9.0, -8.0, 7.0)
     coupon_tracker.save_coupons("2026-11-08", day, set())

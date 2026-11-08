@@ -47,9 +47,13 @@ function LegRow({ leg }: { leg: CouponLeg }): ReactElement {
           {leg.fair && (
             <span
               className="text-slate-500 text-[10px] font-normal ml-1.5"
-              title="Modelin %50 gördüğü çizgi. iddaa'nın baremleri bundan 4+ sayı uzaksa piyasa farklı düşünüyor: ayağı çıkar."
+              title={
+                leg.source === 'market'
+                  ? 'Piyasa çizgisi: olasılıklar onun etrafında kuruldu'
+                  : 'Modelin %50 gördüğü çizgi (piyasa çizgisi yoktu)'
+              }
             >
-              adil {leg.fair}
+              {leg.source === 'market' ? 'piyasa' : 'adil'} {leg.fair}
             </span>
           )}
         </p>
@@ -170,9 +174,9 @@ export default function CouponCard({
           {coupon.experimental && (
             <span
               className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400"
-              title="Toplam modeli son 10 maç ortalamasından iyi değil; karnede ayrı takip ediliyor"
+              title="Eski deneysel üst kuponu: toplam modeli piyasaya karşı %47 tuttuğu için artık kurulmuyor"
             >
-              tahmin gücü düşük
+              kaldırıldı
             </span>
           )}
           {compact && <p className="text-slate-500 text-[10px] mt-1">{coupon.date}</p>}

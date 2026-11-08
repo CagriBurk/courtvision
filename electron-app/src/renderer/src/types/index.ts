@@ -50,6 +50,23 @@ export interface Game {
   homeTopPlayers?: TopPlayer[]
   awayTopPlayers?: TopPlayer[]
   lines?: GameLines | null // handikap / toplam (modeller yoksa null)
+  probHomeMarket?: number | null // piyasanın marjsız ev kazanma olasılığı (çizgi yoksa null)
+}
+
+// Piyasanın (ESPN / DraftKings kapanış çizgisi) söyledikleri ve modelin kendi görüşü.
+// marketMargin / modelMargin ev sahibi farkıdır (+ = ev önde).
+export interface MarketView {
+  provider: string
+  spreadHome: number | null // ev handikapı ("DAL -7.5" → -7.5)
+  marketMargin: number | null
+  marketTotal: number | null
+  pHome: number | null
+  source: { margin?: 'market' | 'model'; total?: 'market' | 'model' }
+  w: { margin?: number; total?: number } // model payı: merkez = piyasa + w·(model − piyasa)
+  modelMargin: number | null
+  modelTotal: number | null
+  modelFairMargin: number | null
+  modelFairTotal: number | null
 }
 
 // Barem merdiveni basamağı. Handikapta line ev sahibi farkı üzerindedir:
@@ -76,6 +93,7 @@ export interface TeamScoreDist {
 export interface GameLines {
   projected: { home: number; away: number } | null
   scores: { home: TeamScoreDist; away: TeamScoreDist } | null
+  market?: MarketView | null // piyasa çizgisi yoksa null
   spread: {
     pred: number // beklenen ev farkı (+ = ev önde)
     sigma: number
@@ -83,6 +101,7 @@ export interface GameLines {
     pHomeWin: number
     ladder: LadderRung[]
     bands: MarginBand[]
+    source?: 'market' | 'model' // olasılıklar piyasa çizgisi etrafında mı, modelden mi
     lowSignal: boolean
   } | null
   total: {
@@ -90,7 +109,8 @@ export interface GameLines {
     sigma: number
     fairLine: number
     ladder: LadderRung[]
-    lowSignal: boolean // model basit tabanı geçemiyor
+    source?: 'market' | 'model'
+    lowSignal: boolean // model basit tabanı geçemiyor (yalnız model kaynaklıysa)
     baseline?: string | null
   } | null
 }
@@ -153,6 +173,7 @@ export interface CouponLeg {
   handicap: number | null
   label: string // "LAL -4.5" / "Üst 222.5"
   fair: string // adil çizgi: "LAL -3.5" / "228.5"
+  source?: 'market' | 'model' // olasılığı veren dağılım (eski kayıtlarda yok = model)
   p: number
   fairOdds: number
   minOdds: number
@@ -182,14 +203,13 @@ export interface CouponGame {
   home: string
   away: string
   favourite: string
-  fairLabel: string
+  fairLabel: string // fiyatlamanın merkezi: piyasa çizgisi (ya da piyasa yoksa model)
   fairTotal: number | null
   center: number
-  pClassifier: number
-  pMargin: number
-  gap: number
+  source: 'market' | 'model'
+  marketLabel: string | null // "DAL -7.5"
+  modelLabel: string | null // modelin kendi adil çizgisi
   eligible: boolean
-  strong: boolean
   reasons: string[]
   gameTimeUtc?: string | null
 }
@@ -197,6 +217,7 @@ export interface CouponGame {
 export interface CouponsToday {
   date: string | null
   nLegs: number
+  source?: 'market' | 'model'
   note: string | null
   skipped?: { tier: string; label: string; reason: string }[]
   games: CouponGame[]
@@ -254,5 +275,28 @@ export interface ReportCard {
     tiers: CouponTierStats[]
     played: { n: number; won: number; profit: number | null; roi: number | null }
   }
+  market?: MarketReport
   recentCoupons: Coupon[]
+}
+
+// Canlı model ↔ piyasa kıyası (yalnız piyasa çizgisi olan, bitmiş maçlar)
+export interface MarketLineReport {
+  n: number
+  modelMae?: number
+  marketMae?: number
+  modelCloser?: number // modelin gerçeğe piyasadan yakın olduğu maç oranı
+  w?: number // canlı model payı (30+ maçtan sonra)
+  wSe?: number
+}
+
+export interface MarketReport {
+  margin: MarketLineReport
+  total: MarketLineReport
+  winner: {
+    n: number
+    modelLogloss?: number
+    marketLogloss?: number
+    modelAcc?: number
+    marketAcc?: number
+  }
 }

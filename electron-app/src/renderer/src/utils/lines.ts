@@ -46,6 +46,16 @@ export function spreadOptions(
     .sort((a, b) => b.p - a.p)
 }
 
+/** Beklenen ev farkı → favorinin handikap etiketi: 7.5 → "DAL -7.5", -3 → "BKN -3.0" */
+export function marginLabel(
+  margin: number | null | undefined,
+  homeAbbr: string,
+  awayAbbr: string
+): string {
+  if (margin == null) return '—'
+  return margin >= 0 ? `${homeAbbr} ${signed(-margin)}` : `${awayAbbr} ${signed(margin)}`
+}
+
 /** Favori takımın adil handikap etiketi: "LAL -12.5" */
 export function fairHandicapLabel(
   spread: NonNullable<GameLines['spread']>,

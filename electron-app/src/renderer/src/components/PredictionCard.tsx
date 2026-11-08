@@ -154,13 +154,28 @@ export default function PredictionCard({
       />
       <div className="flex justify-between text-xs mt-1 font-semibold">
         <span className="text-slate-300">{Math.round(game.probHome * 100)}%</span>
+        {game.probHomeMarket != null && (
+          <span
+            className="text-slate-500 font-normal text-[11px] cursor-help"
+            title="Çubuk modelin olasılığı. Piyasa: kapanış moneyline'ından marjı çıkarılmış olasılık (geçmişte modelden isabetli)."
+          >
+            piyasa {Math.round(game.probHomeMarket * 100)}% ·{' '}
+            {Math.round((1 - game.probHomeMarket) * 100)}%
+          </span>
+        )}
         <span className="text-slate-300">{Math.round((1 - game.probHome) * 100)}%</span>
       </div>
 
       {/* Handikap / toplam özeti */}
       {game.lines?.spread && (
         <div className="flex items-center justify-between mt-2 text-[11px] text-slate-400 bg-slate-900/40 rounded-md px-2 py-1">
-          <span title="Adil handikap: modelin iki tarafa eşit şans verdiği çizgi">
+          <span
+            title={
+              game.lines.spread.source === 'market'
+                ? 'Piyasa çizgisi (olasılıklar onun etrafında kuruldu)'
+                : 'Adil handikap: modelin iki tarafa eşit şans verdiği çizgi (piyasa çizgisi yok)'
+            }
+          >
             Handikap{' '}
             <span className="text-slate-200 font-semibold">
               {fairHandicapLabel(game.lines.spread, game.home.abbreviation, game.away.abbreviation)}

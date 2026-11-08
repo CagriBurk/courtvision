@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ClipboardCheck } from 'lucide-react'
 import CouponCard from '../components/CouponCard'
-import { Calibration, ReportCard as ReportCardData } from '../types'
+import { Calibration, MarketLineReport, MarketReport, ReportCard as ReportCardData } from '../types'
 
 const pct = (v: number | null | undefined, d = 0): string =>
   v === null || v === undefined ? '—' : `%${(v * 100).toFixed(d)}`
@@ -102,7 +102,78 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   )
 }
 
-type Tab = 'coupons' | 'handicap' | 'side' | 'total'
+function MarketRow({
+  label,
+  unit,
+  r
+}: {
+  label: string
+  unit: string
+  r: MarketLineReport
+}): ReactElement {
+  const better = r.n > 0 && r.modelMae != null && r.marketMae != null
+  return (
+    <tr className="border-t border-slate-700/40">
+      <td className="py-1.5 text-slate-300">{label}</td>
+      <td className="py-1.5 text-right text-slate-400 tabular-nums">{r.n}</td>
+      <td className="py-1.5 text-right text-white tabular-nums">
+        {better ? `${r.marketMae!.toFixed(2)} ${unit}` : '—'}
+      </td>
+      <td className="py-1.5 text-right text-slate-300 tabular-nums">
+        {better ? `${r.modelMae!.toFixed(2)} ${unit}` : '—'}
+      </td>
+      <td className="py-1.5 text-right text-slate-400 tabular-nums">
+        {r.modelCloser != null ? pct(r.modelCloser, 0) : '—'}
+      </td>
+      <td className="py-1.5 text-right text-slate-400 tabular-nums">
+        {r.w != null ? `${r.w.toFixed(2)} ± ${r.wSe!.toFixed(2)}` : '—'}
+      </td>
+    </tr>
+  )
+}
+
+function MarketSection({ m }: { m: MarketReport }): ReactElement {
+  const w = m.winner
+  return (
+    <>
+      <Section
+        title="Model mi piyasa mı? (canlı)"
+        sub="Yalnız piyasa çizgisi olan, bitmiş maçlar. Ortalama hata: düşük olan daha isabetli."
+      >
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-slate-500 text-[10px]">
+              <th className="text-left font-medium pb-1">Pazar</th>
+              <th className="text-right font-medium pb-1">maç</th>
+              <th className="text-right font-medium pb-1">piyasa hatası</th>
+              <th className="text-right font-medium pb-1">model hatası</th>
+              <th className="text-right font-medium pb-1">model daha yakın</th>
+              <th className="text-right font-medium pb-1">model payı (w)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <MarketRow label="Fark (handikap)" unit="sayı" r={m.margin} />
+            <MarketRow label="Toplam" unit="sayı" r={m.total} />
+          </tbody>
+        </table>
+        {w.n > 0 && (
+          <p className="text-slate-300 text-xs">
+            Kazanan ({w.n} maç): piyasa isabet {pct(w.marketAcc ?? null, 1)}, log-loss{' '}
+            {w.marketLogloss?.toFixed(3)} · model isabet {pct(w.modelAcc ?? null, 1)}, log-loss{' '}
+            {w.modelLogloss?.toFixed(3)}
+          </p>
+        )}
+      </Section>
+      <p className="text-slate-600 text-[11px] leading-relaxed">
+        w: gerçek ≈ piyasa + w × (model − piyasa). 0’a yakınsa model piyasanın bilmediği bir şey
+        bilmiyor demektir. Geçmişte (2012-2026, 16 bin maç) sızıntısız ölçümde w ≈ 0 çıktı; canlı
+        değer 30 maçtan sonra gösterilir ama birkaç yüz maç olmadan ±0.1’den dar olmaz.
+      </p>
+    </>
+  )
+}
+
+type Tab = 'coupons' | 'handicap' | 'side' | 'total' | 'market'
 
 export default function ReportCard({ apiBase }: { apiBase: string }): ReactElement {
   const [tab, setTab] = useState<Tab>('coupons')
@@ -120,7 +191,8 @@ export default function ReportCard({ apiBase }: { apiBase: string }): ReactEleme
     { key: 'coupons', label: 'Kuponlar' },
     { key: 'handicap', label: 'Handikap' },
     { key: 'side', label: 'Taraf' },
-    { key: 'total', label: 'Alt / Üst' }
+    { key: 'total', label: 'Alt / Üst' },
+    { key: 'market', label: 'Model ↔ Piyasa' }
   ]
 
   return (
@@ -290,6 +362,13 @@ export default function ReportCard({ apiBase }: { apiBase: string }): ReactEleme
                 )}
               </>
             )}
+
+            {tab === 'market' &&
+              (data.market ? (
+                <MarketSection m={data.market} />
+              ) : (
+                <p className="text-slate-500 text-sm">Henüz piyasa kaydı yok.</p>
+              ))}
 
             {tab === 'side' && (
               <Section

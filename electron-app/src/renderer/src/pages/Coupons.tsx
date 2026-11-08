@@ -5,11 +5,16 @@ import CouponCard from '../components/CouponCard'
 import { CouponGame, CouponsToday } from '../types'
 
 function GameRow({ g }: { g: CouponGame }): ReactElement {
+  // Piyasa / model çizgileri ayrı sütunlarda; gerekçelerde tekrar etme
+  const notes = g.reasons.filter((r) => !r.startsWith('piyasa:') && !r.startsWith('model:'))
   return (
     <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-700/30 last:border-0 text-xs">
       <div className="w-4 shrink-0">
         {g.eligible ? (
-          <CheckCircle2 size={14} className={g.strong ? 'text-emerald-400' : 'text-slate-400'} />
+          <CheckCircle2
+            size={14}
+            className={g.source === 'market' ? 'text-emerald-400' : 'text-slate-400'}
+          />
         ) : (
           <CircleSlash size={14} className="text-slate-600" />
         )}
@@ -17,21 +22,17 @@ function GameRow({ g }: { g: CouponGame }): ReactElement {
       <span className="w-28 text-slate-200 font-medium">
         {g.away} @ {g.home}
       </span>
-      <span className="w-28 text-slate-400" title="Modelin adil handikabı (%50)">
-        adil <span className="text-white font-semibold">{g.fairLabel}</span>
+      <span className="w-32 text-slate-400" title="Piyasanın kapanış çizgisi (DraftKings)">
+        piyasa <span className="text-white font-semibold">{g.marketLabel ?? '—'}</span>
       </span>
-      <span className="w-20 text-slate-400 tabular-nums" title="Modelin adil toplamı">
+      <span className="w-32 text-slate-500" title="Modelin kendi adil çizgisi (yalnızca görüş)">
+        model <span className="text-slate-300">{g.modelLabel ?? '—'}</span>
+      </span>
+      <span className="w-20 text-slate-400 tabular-nums" title="Adil toplam">
         {g.fairTotal != null ? `toplam ${g.fairTotal.toFixed(1)}` : ''}
       </span>
-      <span
-        className="w-28 text-slate-500 tabular-nums"
-        title="Kazanan modeli / fark modeli: ev sahibinin kazanma olasılığı"
-      >
-        %{Math.round(g.pClassifier * 100)} / %{Math.round(g.pMargin * 100)}
-      </span>
       <span className={`flex-1 ${g.eligible ? 'text-slate-400' : 'text-slate-600'}`}>
-        {g.strong ? 'güçlü · ' : ''}
-        {g.reasons.join(' · ')}
+        {notes.join(' · ')}
       </span>
     </div>
   )
@@ -76,7 +77,7 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
           Günün Kuponları
         </h1>
         <p className="text-slate-500 text-sm mt-0.5">
-          {data?.date ?? '—'} · favori handikap verir · maç başına tek seçim
+          {data?.date ?? '—'} · favori handikap verir · her maç tek kupon
         </p>
       </div>
 
@@ -84,21 +85,20 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
         <div className="flex gap-2 bg-blue-500/5 border border-blue-500/20 rounded-lg px-3 py-2 text-[12px] text-blue-100/80">
           <Info size={14} className="shrink-0 mt-0.5 text-blue-400" />
           <p>
-            Kuponlar iddaa oranlarını bilmeden kuruldu. Her ayağın yanındaki{' '}
-            <span className="text-white font-semibold">en az</span> oran, modelin olasılığına %5
-            güvenlik payı eklenmiş eşik: iddaa bu ayağa daha düşük oran veriyorsa o ayak değerli
-            değil. Kupon, maçlardan biri başlayınca ya da oynadığın oranı kaydedince kilitlenir ve
-            karneye o haliyle geçer.
+            Olasılıklar piyasanın kapanış çizgisi etrafında, piyasanın geçmiş hata dağılımıyla
+            kurulur; her maç en fazla bir kupona girer, böylece tek bir maç bütün kuponları yakmaz.{' '}
+            <span className="text-white font-semibold">Adil</span> oran = 1 / olasılık. Kupon,
+            maçlardan biri başlayınca kilitlenir ve karneye o haliyle geçer.
           </p>
         </div>
         <div className="flex gap-2 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2 text-[12px] text-amber-100/80">
           <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-400" />
           <p>
-            <span className="text-white font-semibold">Piyasa kontrolü:</span> her ayağın yanında
-            modelin <span className="text-white font-semibold">adil</span> çizgisi yazar. iddaa’nın
-            o maç için açtığı baremler adil çizgiden 4 sayıdan fazla uzaksa (ör. adil MIA -3.5,
-            iddaa en düşük MIA -7.5) piyasa modelin bilmediği bir şey biliyor olabilir: sakatlık,
-            dinlenme. O ayağı kupondan çıkar.
+            <span className="text-white font-semibold">Neden piyasa?</span> 2012’den bu yana 16 bin
+            maçta model, piyasadan ayrıldığı yerlerde haklı çıkmadı: ayrılıklar değer değil,
+            çoğunlukla modelin hatasıydı. Bu yüzden kuponlar piyasa çizgisiyle kurulur; modelin
+            çizgisi aşağıda yalnızca görüş olarak durur.
+            {data?.source === 'model' && ' Bugün piyasa çizgisi yok: kuponlar modelden kuruldu.'}
           </p>
         </div>
 
@@ -134,9 +134,9 @@ export default function Coupons({ apiBase }: { apiBase: string }): ReactElement 
           <div>
             <h2 className="text-slate-300 font-semibold text-sm mb-1">Maç seçimi</h2>
             <p className="text-slate-600 text-[11px] mb-2">
-              Kupona yalnızca iki modelin aynı tarafı benzer olasılıkla gösterdiği, sezonda en az 5
-              maç oynamış takımların başlamamış maçları girer. Ayak sayısı güçlü maç sayısına göre
-              (2-4); bugün {data?.nLegs ?? 0} ayak.
+              Kupona piyasa çizgisi olan, başlamamış maçlar girer; her maç tek kupona. Güvenli kupon
+              büyük favorileri, dengeli ortadakileri, riskli kalanları alır. Ayak sayısı uygun maç
+              sayısına göre (2-3); bugün {data?.nLegs ?? 0} ayak.
             </p>
             <div className="bg-slate-800/40 rounded-xl border border-slate-700/40">
               {games.map((g) => (

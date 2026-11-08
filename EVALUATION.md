@@ -3,10 +3,11 @@
 Kasım 2026. Bu rapor modelin ne kadar iyi olduğunu ve bahis piyasasının kapanış çizgisine
 karşı ne kattığını, sızıntısız bir düzenekle ölçer. Kısa özet:
 
-- Model, halka açık kutu skoru verileriyle **piyasanın kapanış çizgisine 0.1-0.2 sayı
-  yaklaşıyor** (fark hatası 10.96-11.07, piyasa 10.89), ama piyasanın bilmediği bir şey bilmiyor.
+- Sızıntısız model, halka açık kutu skoru verileriyle **Elo tabanını 0.3 sayı geçiyor, piyasanın
+  kapanış çizgisinin 0.4 sayı gerisinde kalıyor** (fark hatası 11.27-11.31; Elo 11.61, piyasa 10.89)
+  ve piyasanın bilmediği bir şey bilmiyor (holdout w = 0.00 ± 0.11).
 - İlk ölçümde görülen avantaj (w ≈ 0.3) **geriye dönük bilgi sızıntısıydı**: eğitimde "eksik
-  oyuncu", maçın kendi kutu skorundan okunuyordu. Oyuncu bilgisi çıkarılınca w ≈ 0.
+  oyuncu", maçın kendi kutu skorundan okunuyordu. Düzeltilince w sıfıra indi.
 - Toplam modeli piyasaya hiçbir şey katmıyor (w ≈ 0); tarafını oynamak %47 tuttu.
 - Uygulama bu yüzden olasılıkları **piyasa çizgisi etrafında** kurar; model ikinci görüş olarak
   kalır ve karne canlıda ikisini kıyaslamaya devam eder.
@@ -28,28 +29,32 @@ pipeline'dan geçer (test: `test_live_features_match_training*`).
 
 ## 2. Modelin kendi başına başarısı (2025-26 holdout)
 
+Sızıntısız özelliklerle yeniden eğitilmiş modeller (100 Optuna denemesi):
+
 | Model | Ölçüt | Model | Basit taban |
 |---|---|---|---|
-| Kazanan | doğruluk / log-loss | %69.3 / 0.586 | hep ev sahibi %55.4 |
-| Fark (ev − dep.) | ortalama hata (MAE) | 11.07 sayı (×1.22 düzeltmeyle 10.96) | Elo farkı 11.61 |
-| Toplam | ortalama hata | 15.38 sayı | son-10 ortalaması 15.35 |
+| Kazanan | doğruluk / log-loss | %69.0 / 0.592 (fark modelinden)¹ | hep ev sahibi %55.4 |
+| Fark (ev − dep.) | ortalama hata (MAE) | 11.31 sayı (düzeltmeyle 11.27) | Elo farkı 11.61 |
+| Toplam | ortalama hata | 15.41 sayı | son-10 ortalaması 15.35 |
 
-Fark modeli tahminleri ortalamaya sıkıştırıyor (gerçek ≈ 1.2 × tahmin); hata dağılımı bu yüzden
-düzeltilmiş ortalama + ampirik şekille kuruldu, 12 aday arasından holdout CRPS'e göre seçildi.
-Toplam modeli tabanı geçemiyor: sezon içi toplam dalgalanmasının yalnızca ~%6'sı maç öncesi
-veriden açıklanabiliyor (`08_line_experiment.py`'de tempo, verim, lig trendi denendi).
+¹ Sınıflandırıcı %68.6 / 0.596; fark modelinin P(fark > 0) olasılığı 0.001'den fazla daha iyi
+olduğu için uygulama kazananı artık fark modelinden alıyor.
 
-*Bu tablo sızıntılı özelliklerle eğitilmiş modelin; sızıntısız sonuçlar 6. bölümde.*
+Fark modeli tahminleri ortalamaya sıkıştırıyor (gerçek ≈ 1.17 × tahmin); hata dağılımı bu yüzden
+düzeltilmiş ortalama + ampirik şekille kuruldu, 12 aday arasından holdout CRPS'e göre seçildi
+(±8 sayılık barem merdiveninde tahmin ile gerçekleşen arası en fazla 2.4 puan). Toplam modeli
+tabanı geçemiyor: sezon içi toplam dalgalanmasının yalnızca ~%6'sı maç öncesi veriden
+açıklanabiliyor (`08_line_experiment.py`'de tempo, verim, lig trendi denendi).
 
 ## 3. Piyasa ile kıyas
 
 Kapanış çizgisi (2025-26 holdout, aynı 1.224 maç):
 
-| | Piyasa | Model |
+| | Piyasa | Model (sızıntısız) |
 |---|---|---|
-| Fark MAE | **10.89** | 10.96 – 11.07 |
-| Toplam MAE | **14.60** | 15.38 |
-| Kazanan log-loss / doğruluk | **0.568** / %69.2 | 0.586 / %69.3 |
+| Fark MAE | **10.89** | 11.27 – 11.32 |
+| Toplam MAE | **14.60** | 15.41 |
+| Kazanan log-loss / doğruluk | **0.568** / %69.2 | 0.592 / %69.0 |
 
 Piyasanın daha isabetli olması beklenen bir şey. Asıl soru modelin **ek bilgi** taşıyıp
 taşımadığı. Bunu her maç için şu regresyonla ölçtük:
@@ -70,6 +75,7 @@ harmanla soruldu: `logit(p) = c + a·logit(piyasa) + b·logit(model)`.
 |---|---|---|---|
 | Oyuncu eksikliği kutu skorundan (ilk ölçüm) | 0.35 ± 0.03 | 0.32 ± 0.11 | %52.9 (başabaş %52.4) |
 | Oyuncu eksikliği özellikleri yok | 0.05 ± 0.03 | −0.13 ± 0.10 | %47.6 |
+| Sızıntısız (önceden bilinen yokluk, 6. bölüm) | 0.12 ± 0.03 | 0.00 ± 0.11 | %50.5 |
 
 Kazananda harman katsayısı da aynı biçimde 0.11 ± 0.05'ten −0.01 ± 0.05'e indi.
 
@@ -124,23 +130,34 @@ Temizlik sonrası her sezonda piyasa hatası makul aralıkta: fark 9.1-10.9, top
 
 ## 6. Sızıntısız model
 
-⏳ *`MODEL_EGIT.bat` ve `09_market_eval.py --refresh` sonrası doldurulacak.*
+Düzeltmeden sonra yeniden eğitim (`MODEL_EGIT.bat`, 9 Kasım 2026) ve `09_market_eval.py --refresh`:
 
 | | Sızıntılı | Sızıntısız |
 |---|---|---|
-| Kazanan doğruluk / log-loss (holdout) | %69.3 / 0.586 | ⏳ |
-| Fark MAE (holdout) | 11.07 | ⏳ |
-| Toplam MAE (holdout) | 15.38 | ⏳ |
-| Fark w (OOF / holdout) | 0.35 / 0.32 | ⏳ |
-| Uygulamadaki model payı (kural aşağıda) | — | ⏳ |
+| Kazanan doğruluk / log-loss (holdout) | %69.3 / 0.586 | %69.0 / 0.592 (sınıflandırıcı %68.6 / 0.596) |
+| Fark MAE (holdout) | 11.07 | 11.31 (düzeltmeyle 11.27) |
+| Toplam MAE (holdout) | 15.38 | 15.41 |
+| Fark w, OOF | 0.35 ± 0.03 | 0.12 ± 0.03 |
+| Fark w, holdout | 0.32 ± 0.11 | **0.00 ± 0.11** |
+| Modelin tarafı, holdout (başabaş %52.4) | %52.9 | %50.5 |
+| Kazanan harman katsayısı b, OOF | 0.11 ± 0.05 | 0.02 ± 0.05 |
+| Uygulamadaki model payı | — | **0** (holdout w anlamlı değil) |
+
+- **Sızıntının bedeli:** fark hatasında ~0.25 sayı, kazanan log-loss'unda ~0.006. İlk rakamlar
+  bu kadar iyimserdi; dürüst model hâlâ Elo tabanını geçiyor (11.31 / 11.61).
+- **OOF'taki 0.12 eski sezonlardan geliyor:** sezona göre w 2012-13'te 0.52 (consensus çizgisi,
+  zayıf), 2013-20 arası 0.1-0.2, 2020 sonrası ≈ 0 (DraftKings). Güncel kapanış çizgileri modelin
+  söyleyebileceği her şeyi zaten içeriyor.
+- **Uygulamanın piyasa dağılımı** (`models/market_distribution.json`): fark σ 13.39 (kde),
+  toplam σ 17.98 (normal); üç şeklin CRPS'i neredeyse eşit. İkisinde de model payı 0.
 
 ## 7. Uygulamaya etkisi
 
 - **Piyasa merkezli olasılıklar** (`market_blend.py`): piyasa çizgisi varsa handikap merdiveni,
   fark bantları ve toplam baremleri çizgi etrafında, piyasanın kendi hata dağılımıyla kurulur
-  (2022-25 sezonlarından; fark σ ≈ 13.4, kde şekli; toplam σ ≈ 18.0, normal; şekil holdout
-  CRPS'e göre seçilir). Merkez = piyasa + w · (model − piyasa); w yalnızca OOF ve holdout'ta
-  ikisi de 2 standart hatadan büyükse kullanılır, aksi halde 0.
+  (2022-25 sezonlarından, holdout dahil yeniden öğrenilir; şekil holdout CRPS'e göre seçilir).
+  Merkez = piyasa + w · (model − piyasa); w yalnızca OOF ve holdout'ta ikisi de 2 standart
+  hatadan büyükse kullanılır, aksi halde 0 (şu an 0).
 - **Model görünür kalır:** panelde piyasa ve model çizgisi yan yana; 4+ sayı ayrılıkta uyarı.
   Kazanma çubuğu modelin, yanındaki "piyasa" yüzdesi marjsız moneyline.
 - **Kuponlar:** piyasa olasılığıyla; her maç en fazla bir kupona; iki modelin uyumu ve "güçlü

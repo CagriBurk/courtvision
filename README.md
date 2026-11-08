@@ -5,9 +5,10 @@ trained on 30,000+ regular-season games (2001–2026), turns those predictions i
 distributions, and measures itself honestly against the betting market's closing lines.
 
 It is a hobby and learning project, not a betting tool. Its most interesting result is a
-negative one: a good model built from public box-score data gets within ~0.1–0.2 points of the
-closing line, but adds no information the market does not already have. The apparent edge it
-first showed came from a hindsight leak, found and fixed with 16,900 historical closing lines.
+negative one: a model built from public box-score data beats simple baselines and lands
+within ~0.4 points of the closing line, but adds no information the market does not already
+have. The apparent edge it first showed came from a hindsight leak, found and fixed with 16,900
+historical closing lines.
 See [EVALUATION.md](EVALUATION.md).
 
 ## Features
@@ -31,17 +32,16 @@ See [EVALUATION.md](EVALUATION.md).
 
 | | Model | Simple baseline | Market (closing line) |
 |---|---|---|---|
-| Winner accuracy / log-loss | 69.3% / 0.586 ⏳ | 55.4% (always home) | 69.2% / 0.568 |
-| Margin MAE (points) | 11.07 ⏳ | 11.61 (Elo) | **10.89** |
-| Total MAE (points) | 15.38 ⏳ | 15.35 (last-10 average) | **14.60** |
-
-⏳ Pre-fix numbers: they include the hindsight leak described in EVALUATION.md and will be
-replaced after the leak-free retrain.
+| Winner accuracy / log-loss | 69.0% / 0.592 | 55.4% (always home) | 69.2% / **0.568** |
+| Margin MAE (points) | 11.31 | 11.61 (Elo) | **10.89** |
+| Total MAE (points) | 15.41 | 15.35 (last-10 average) | **14.60** |
 
 Does the model add anything to the market? In `actual ≈ market + w·(model − market)`, the
-weight was **w ≈ 0.3** with the leaky player-availability features and **w ≈ 0** without
-them — the model's whole edge was hindsight. Details, data-quality lessons and the
-leak-free result: [EVALUATION.md](EVALUATION.md).
+weight was **w = 0.32 ± 0.11** while player absences were read from each game's own box score,
+and **w = 0.00 ± 0.11** once only absences known before tip-off were counted — the model's
+whole edge was hindsight (it cost ~0.25 points of margin error). The app therefore prices
+around the market and shows the model as a second opinion. Details and data-quality lessons:
+[EVALUATION.md](EVALUATION.md).
 
 ## Tech Stack
 

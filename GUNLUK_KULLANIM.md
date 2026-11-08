@@ -1,6 +1,6 @@
 # CourtVision — Günlük Kullanım ve Veri Toplama Planı
 
-Hazırlanma: 31 Ekim 2026 · Güncelleme: 8 Kasım 2026 (Faz 5: handikap ve toplam)
+Hazırlanma: 31 Ekim 2026 · Güncelleme: 8 Kasım 2026 (Faz 6b: piyasa çizgileri, piyasa merkezli olasılıklar)
 
 Amaç: Modeli değiştirmeden birkaç hafta boyunca her gün tahmin üretmek, sonuçların
 otomatik dolduğunu doğrulamak ve canlı isabet oranını ölçmek.
@@ -230,23 +230,24 @@ Canlı sonuçlar bu kararlar için ilk gerçek veri olacak.
 
 Bir maça tıkla; sağ paneldeki **Handikap & Toplam** bölümü:
 
-- **Adil çizgi:** modelin iki tarafa da %50 şans verdiği barem. Adil handikap `LAL -12.5`
-  ise model "LAL 13+ farkla kazanır" ile "kazanamaz" arasında kararsız.
-- **Adil oran = 1 / olasılık.** %62'lik bir seçeneğin adil oranı 1.61. iddaa'nın oranı
-  adil orandan **belirgin şekilde yüksekse** (yaklaşık %5) model o bahsi değerli görür.
-  Uygulamadaki **Nasıl Kullanılır** sayfasında küçük bir değer hesaplayıcı var.
+- **Piyasa / Model kutusu:** üstte DraftKings'in maç öncesi çizgisi (ESPN'den: handikap,
+  toplam, marjsız ev kazanma olasılığı), altında modelin kendi adil çizgisi. Model piyasadan
+  4+ sayı ayrılırsa sarı uyarı çıkar; geçmişte bu ayrılıklar çoğunlukla modelin hatasıydı.
+- **Olasılıklar piyasa merkezli:** merdiven, bantlar ve toplam baremleri piyasa çizgisi
+  etrafında, piyasanın son sezonlardaki hata dağılımıyla kurulur (`models/market_distribution.json`).
+  Piyasa çizgisi yoksa (ESPN vermediyse) modelin dağılımı kullanılır ve kutu görünmez.
+- **Adil çizgi:** iki tarafa da %50 şans veren barem. **Adil oran = 1 / olasılık**
+  (%62'lik seçeneğin adil oranı 1.61).
 - **Handikap merdiveni:** favori tarafın seçenekleri en güvenliden en riskliye sıralı.
-  Handikap büyüdükçe olasılık düşer, adil oran yükselir. "Diğer tarafı göster" ile karşı
-  takımın seçenekleri. iddaa'nın aynı maç için açtığı baremlerden en iyi fiyatlananı seç.
+  "Diğer tarafı göster" ile karşı takımın seçenekleri.
 - **Kazanma farkı bantları:** 1-5, 6-10, 11-15, 16-20, 21-25, 26+ için olasılık ve adil oran.
-- **Toplam sayı:** her barem için üst / alt olasılığı. "Tahmin gücü düşük" etiketi: model
-  iki takımın son 10 maç ortalamasından iyi değil. Olasılıklar dürüst ama avantaj sağlamaz;
-  iddaa çizgisi adil çizgiden birkaç sayı uzaksa bakmaya değer.
+- **Toplam sayı:** her barem için üst / alt olasılığı. "Tahmin gücü düşük" etiketi yalnız
+  piyasa çizgisi olmayan maçlarda çıkar (toplam modeli basit ortalamayı geçemiyor).
 - **Tahmini skor:** her takım için en olası 10 sayılık aralık. Bir takımın skoru ±11-12 sayı
   oynadığı için bu aralık bile en fazla ~%33 ihtimal taşır.
 
-İpuçları: handikap toplamdan güvenilirdir; kombinede bahis şirketinin marjı çarpılır; aynı
-maçtan iki seçimi (kazanan + handikap) aynı kupona koyma, birbirlerine bağlıdırlar.
+Maç kartındaki çubuk **modelin** kazanma olasılığı; yanındaki gri "piyasa" yüzdesi kapanış
+oranlarından marjı çıkarılmış olasılık. Neden ikisi ayrı: bkz. `EVALUATION.md`.
 
 ---
 
@@ -258,7 +259,10 @@ maçtan iki seçimi (kazanan + handikap) aynı kupona koyma, birbirlerine bağl�
 2. Proje klasöründeki **`MODEL_EGIT.bat`**'a çift tıkla (yaklaşık 2 saat). Sırasıyla özellik
    tablosunu kurar, kazanan + fark + toplam modellerini 100 denemeyle eğitir ve değerlendirir.
 3. Bitince çıktının sonundaki holdout sonuçlarına bak (kazanan doğruluğu, fark/toplam ortalama
-   hatası, "Kazanan olasılığı: sınıflandırıcı mı, fark modeli mi?"). Uygulamayı yeniden aç.
+   hatası, "Kazanan olasılığı: sınıflandırıcı mı, fark modeli mi?").
+4. Piyasa kıyasını ve piyasa dağılımını yenile (~10 dk): `python src/09_market_eval.py --refresh`.
+   Çıktının sonunda "model payı w" yazar; 0 ise uygulama tamamen piyasa çizgisiyle fiyatlar.
+5. Uygulamayı yeniden aç.
 
 Elle çalıştırmak istersen aynı adımlar:
 
@@ -268,6 +272,15 @@ cd C:\Users\cbura\Desktop\courtvision
 python src/02_build_features.py
 python src/03_train_model.py --task all --trials 100
 python src/04_evaluate_model.py
+python src/09_market_eval.py --refresh
+```
+
+**Geçmiş piyasa çizgileri** (`data/processed/market_lines.parquet`) bir kez indirildi
+(2012-13'ten bu yana ~16.900 maç). Günlük çizgileri 05 kendisi ekler. Eksik bir sezonu tamamlamak
+gerekirse (yarıda kesilirse kaldığı yerden devam eder, birkaç terminalde paralel çalışabilir):
+
+```powershell
+python src/espn_odds.py --backfill --season 2025-26 2026-27
 ```
 
 ---
@@ -279,20 +292,16 @@ python src/04_evaluate_model.py
 - Üç handikap kuponu: **Güvenli** (ayak başı %68-80), **Dengeli** (%58-68), **Riskli** (%50-58).
   Favori her zaman **handikap verir** (-1.5 ve üstü; artı handikap yok). Hafif favoriler bu yüzden
   güvenli kupona giremez; o gün güvenli seviyeye giren 2 maç yoksa güvenli kupon kurulmaz.
-- Ek olarak **Üst (deneysel)** kuponu: aynı maçlarda ≈%62'lik üst baremleri. Toplam modeli basit
-  ortalamayı geçemediği için karnede ayrı seviye olarak izlenir. Taraf (maç sonucu) kuponlara girmez.
-- **Piyasa kontrolü:** her ayağın yanında modelin **adil** çizgisi yazar. iddaa'nın o maç için açtığı
-  baremler adil çizgiden 4 sayıdan fazla uzaksa (ör. adil MIA -3.5, iddaa en düşük MIA -7.5) piyasa
-  modelin bilmediği bir şey biliyor olabilir (sakatlık, dinlenme); o ayağı çıkar.
-- Maç seçimi: başlamamış, iki takımı da sezonda en az 5 maç oynamış, kazanan modeli ile fark
-  modelinin aynı tarafı benzer olasılıkla gösterdiği maçlar. Ayak sayısı güçlü maç sayısına
-  göre 2-4. Sayfanın altındaki "Maç seçimi" tablosu her maçın neden seçildiğini ya da elendiğini yazar.
-- Her ayakta **en az** oran: adil oran + %5 güvenlik payı. iddaa'nın oranı bunun altındaysa o
-  ayağı oynama. Kuponun **en az toplam oranı** da aynı mantık.
-- **Kilit:** kupon, içindeki bir maç başlayınca ya da oynadığın toplam oranı kaydedince kilitlenir;
-  karneye o haliyle geçer. Kilitlenmemiş kuponlar sonraki güncellemede değişebilir (sakatlık haberi).
-- Oranı kaydetmek isteğe bağlıdır; kaydettiklerin için karnede kâr/zarar ve ROI hesaplanır.
-  Yanlış girdiysen "temizle" ile sil; kupon, maçları başlamadıysa yeniden güncellenebilir olur.
+- **Olasılıklar piyasa merkezli** (11. bölüm). Kupona piyasa çizgisi olan, başlamamış maçlar girer.
+  O gün hiç piyasa çizgisi yoksa kuponlar modelden kurulur ve sayfada bunu söyleyen bir not çıkar.
+- **Her maç en fazla bir kupona girer**, böylece tek bir sürpriz bütün kuponları yakmaz. Güvenli kupon
+  büyük favorileri, dengeli ortadakileri, riskli kalanları alır; ayak sayısı uygun maç sayısına göre
+  2-3. Kilitli bir kuponun maçları yeniden kurulan kuponlara girmez.
+- Eski **Üst (deneysel)** kuponu kaldırıldı: toplam modelinin tarafı piyasaya karşı %47 tuttu. Eski
+  üst kuponları kayıtta kalır ve sonuçlanmaya devam eder.
+- Sayfanın altındaki "Maç seçimi" tablosu her maç için piyasa ve model çizgisini yan yana yazar.
+- **Kilit:** kupon, içindeki bir maç başlayınca (ya da bir oran kaydedilince) kilitlenir; karneye o
+  haliyle geçer. Kilitlenmemiş kuponlar sonraki güncellemede değişebilir (sakatlık haberi).
 
 **Karne sayfası** "model ne vaat etti, ne gerçekleşti" sorusunu cevaplar:
 
@@ -301,6 +310,9 @@ python src/04_evaluate_model.py
   tablosu ve kazanma farkı bantları. Mavi çizgi (vaat) gri şeridin (%95 aralık) içindeyse model
   o seviyede dürüst.
 - **Taraf** ve **Alt / Üst:** aynı tablo; alt/üst sadece takip içindir.
+- **Model ↔ Piyasa:** piyasa çizgisi olan bitmiş maçlarda modelin ve piyasanın ortalama hatası,
+  modelin kaç maçta gerçeğe daha yakın olduğu, kazananda log-loss ve isabet. 30 maçtan sonra canlı
+  **w** (gerçek ≈ piyasa + w × (model − piyasa)) görünür; birkaç yüz maç olmadan ±0.1'den dar olmaz.
 - Kupon tutma oranı küçük örneklerde çok oynar; modelin dürüstlüğünü barem ve ayak kalibrasyonundan oku.
 
 Kayıtlar: `data/predictions/coupons_log.json` (silme; tahmin kaydı gibi haftada bir yedekle).

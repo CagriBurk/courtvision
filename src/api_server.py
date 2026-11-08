@@ -224,6 +224,7 @@ def _build_game_response(
     row: dict,
     injuries: dict | None = None,
     top_players: dict | None = None,
+    line_quality: dict | None = None,
 ) -> dict:
     """live_features satırını frontend Game arayüzüne çevirir."""
     h_abbr = str(row.get('home_team_abbr') or '')
@@ -405,7 +406,72 @@ def _build_game_response(
         'awayInjuries':   (injuries or {}).get(a_abbr, []),
         'homeTopPlayers': (top_players or {}).get(h_tid, []),
         'awayTopPlayers': (top_players or {}).get(a_tid, []),
+        'lines':          _lines_response(row.get('lines'), line_quality),
     }
+
+
+# ---------------------------------------------------------------------------
+# Handikap / toplam (05_predict_today.py → lines JSON)
+# ---------------------------------------------------------------------------
+# Model, tabanından en az bu kadar iyi değilse "tahmin gücü düşük" etiketi
+LOW_SIGNAL_MIN_GAIN = 0.10  # MAE, sayı
+
+
+def _line_quality() -> dict:
+    """
+    Holdout quality of the margin / total models (04_evaluate_model.py).
+    lowSignal: the model does not clearly beat its simple baseline, so the
+    line is an honest reference rather than an edge.
+    """
+    out = {}
+    for task, name in (("margin", "metrics_margin.json"), ("total", "metrics_total.json")):
+        try:
+            m = json.loads((MODELS_DIR / name).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        hold, base = m.get("holdout") or {}, m.get("baseline") or {}
+        if not hold:
+            continue
+        out[task] = {
+            "mae":         round(hold["mae"], 2),
+            "baselineMae": round(base["mae"], 2) if base.get("mae") is not None else None,
+            "baseline":    base.get("description"),
+            "lowSignal":   base.get("mae") is not None and hold["mae"] > base["mae"] - LOW_SIGNAL_MIN_GAIN,
+        }
+    return out
+
+
+def _lines_response(raw: str | None, quality: dict | None = None) -> dict | None:
+    """lines JSON of one game → frontend GameLines (camelCase, fair odds = 1 / p)."""
+    if not raw:
+        return None
+    lines = json.loads(raw)
+    quality = quality or {}
+
+    def ladder(rows):
+        return [{"line": r["line"], "pOver": r["p_over"]} for r in rows]
+
+    out = {"projected": lines.get("projected")}
+    m = lines.get("margin")
+    out["spread"] = None if not m else {
+        "pred":      m["pred"],
+        "sigma":     m["sigma"],
+        "fairLine":  m["fair_line"],
+        "pHomeWin":  m["p_home_win"],
+        "ladder":    ladder(m["ladder"]),
+        "bands":     m["bands"],
+        "lowSignal": bool(quality.get("margin", {}).get("lowSignal", False)),
+    }
+    t = lines.get("total")
+    out["total"] = None if not t else {
+        "pred":      t["pred"],
+        "sigma":     t["sigma"],
+        "fairLine":  t["fair_line"],
+        "ladder":    ladder(t["ladder"]),
+        "lowSignal": bool(quality.get("total", {}).get("lowSignal", False)),
+        "baseline":  quality.get("total", {}).get("baseline"),
+    }
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -476,8 +542,9 @@ async def today_games():
     except Exception as e:
         print(f"[API] failed to load player/injury: {e}")
 
+    line_quality = _line_quality()
     games = [
-        _build_game_response(dict(row), injuries, top_players)
+        _build_game_response(dict(row), injuries, top_players, line_quality)
         for _, row in df.iterrows()
     ]
 
@@ -572,6 +639,13 @@ async def get_history():
             'predictedWinner':  str(row.get('predicted_winner') or ''),
             'actualWinner':     row.get('actual_winner'),
             'correct':          row.get('correct'),
+            # Handikap / toplam (Faz 5 öncesi kayıtlarda boş)
+            'predMargin':       _opt_num(row.get('pred_margin')),
+            'predTotal':        _opt_num(row.get('pred_total')),
+            'fairMarginLine':   _opt_num(row.get('fair_margin_line')),
+            'fairTotalLine':    _opt_num(row.get('fair_total_line')),
+            'homeScore':        _opt_num(row.get('actual_home_pts')),
+            'awayScore':        _opt_num(row.get('actual_away_pts')),
         })
 
     # İstatistikler
@@ -605,7 +679,29 @@ async def get_history():
             'byTier':           {t: {'correct': 0, 'total': 0} for t in ('HIGH', 'MEDIUM', 'LOW')},
         }
 
+    # Handikap / toplam karnesi (sonuçlanmış maçlar)
+    from prediction_tracker import line_report
+    raw_log = pd.read_parquet(pred_path)
+    stats['lines'] = {
+        task: {
+            'n':         r['n'],
+            'mae':       round(r['mae'], 2),
+            'bias':      round(r['bias'], 2),
+            'within5':   round(r['within_5'] * 100, 1),
+            'within10':  round(r['within_10'] * 100, 1),
+            'ladderCalibration': [
+                {'meanPred': round(b['mean_pred'], 3), 'fracOver': round(b['frac_over'], 3), 'n': b['n']}
+                for b in r['ladder_calibration']
+            ],
+        }
+        for task, r in line_report(raw_log).items()
+    }
+
     return {"predictions": records, "stats": stats}
+
+
+def _opt_num(v):
+    return None if v is None or pd.isna(v) else float(v)
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +768,41 @@ async def model_metrics():
             for f in ev.get('folds', [])
         ],
         'featureImportance': feat_imp,
+        'winSource':         ev.get('win_source', 'classifier'),
+        'lines':             _line_metrics(_read_json),
     }
+
+
+def _line_metrics(read_json) -> dict:
+    """Holdout summary of the margin / total models for the metrics page."""
+    quality = _line_quality()
+    out = {}
+    for task in ("margin", "total"):
+        m = read_json(f"metrics_{task}.json")
+        hold = m.get("holdout")
+        if not hold:
+            continue
+        ladder = m.get("ladder") or {}
+        out[task] = {
+            **quality.get(task, {}),
+            'rmse':         round(hold['rmse'], 2),
+            'bias':         round(hold['bias'], 2),
+            'within10':     round(hold['within_10'] * 100, 1),
+            'ladderEce':    round(ladder['ece'], 4) if ladder.get('ece') is not None else None,
+            'ladderByOffset': [
+                {'offset': r['offset'], 'meanPred': round(r['mean_pred'], 3), 'fracOver': round(r['frac_over'], 3)}
+                for r in ladder.get('by_offset', [])
+            ],
+            'distribution': ladder.get('chosen'),
+            'bands': [
+                {'side': b['side'], 'lo': b['lo'], 'hi': b['hi'],
+                 'obs': round(b['obs'], 3), 'pred': round(b['pred'], 3)}
+                for b in (m.get('bands') or [])
+            ],
+            'nHoldoutGames': m.get('n_holdout_games'),
+            'evaluatedAt':   m.get('evaluated_at'),
+        }
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -258,3 +258,79 @@ def test_game_response_fields_and_factors():
     assert elo["detail"] == "201 puan"
     streak = next(f for f in game["factors"] if "Seri" in f["label"])
     assert streak["detail"] == "UTA 3M · POR 2G"
+
+
+# ---------------------------------------------------------------------------
+# Handicap / total (Faz 5)
+# ---------------------------------------------------------------------------
+def _write_line_metrics(path, task, mae, base_mae):
+    import json
+    path.joinpath(f"metrics_{task}.json").write_text(json.dumps({
+        "holdout": {"mae": mae, "rmse": mae * 1.25, "bias": 0.3, "within_10": 0.5},
+        "baseline": {"mae": base_mae, "description": "taban"},
+        "ladder": {"chosen": "son fold | düzeltilmiş | kde", "ece": 0.02,
+                   "by_offset": [{"offset": 0, "mean_pred": 0.52, "frac_over": 0.5}]},
+        "bands": [{"side": "home", "lo": 26, "hi": None, "obs": 0.065, "pred": 0.075}],
+        "n_holdout_games": 1225, "evaluated_at": "2026-11-08T12:00:00",
+    }))
+
+
+def test_game_lines_and_low_signal_label(tmp_path, monkeypatch):
+    import json
+    import api_server
+    from score_dist import game_lines
+
+    monkeypatch.setattr(api_server, "MODELS_DIR", tmp_path)
+    _write_line_metrics(tmp_path, "margin", 11.07, 11.61)   # beats its baseline
+    _write_line_metrics(tmp_path, "total", 15.38, 15.35)    # does not
+    quality = api_server._line_quality()
+    assert quality["margin"]["lowSignal"] is False and quality["total"]["lowSignal"] is True
+
+    dists = {
+        "margin": {"task": "margin", "shape": "normal", "sigma": {"kind": "const", "value": 13.0}, "no_tie": True},
+        "total": {"task": "total", "shape": "normal", "sigma": {"kind": "const", "value": 18.8}, "no_tie": False},
+    }
+    row = {"game_id": "G1", "home_team_abbr": "UTA", "away_team_abbr": "POR",
+           "home_team_id": 1, "away_team_id": 2, "prob_home": 0.3,
+           "lines": json.dumps(game_lines(dists, -8.2, 226.4))}
+    lines = api_server._build_game_response(row, line_quality=quality)["lines"]
+    assert lines["spread"]["fairLine"] == -8.5 and lines["spread"]["lowSignal"] is False
+    assert len(lines["spread"]["ladder"]) == 9 and set(lines["spread"]["ladder"][0]) == {"line", "pOver"}
+    assert len(lines["spread"]["bands"]) == 12
+    assert lines["total"]["lowSignal"] is True and lines["total"]["baseline"] == "taban"
+    assert lines["projected"]["away"] > lines["projected"]["home"]
+
+    # Games predicted without the new models have no lines
+    assert api_server._build_game_response({**row, "lines": None})["lines"] is None
+
+
+def test_history_and_metrics_include_lines(tmp_path, monkeypatch):
+    import json
+    import api_server
+    import prediction_tracker
+
+    monkeypatch.setattr(prediction_tracker, "PRED_DIR", tmp_path)
+    monkeypatch.setattr(prediction_tracker, "PRED_LOG", tmp_path / "predictions_log.parquet")
+    monkeypatch.setattr(api_server, "PRED_DIR", tmp_path)
+    monkeypatch.setattr(api_server, "MODELS_DIR", tmp_path)
+
+    ladder = {"margin": {"fair_line": 5.5, "ladder": [{"line": 5.5, "p_over": 0.5}]},
+              "total": {"fair_line": 221.5, "ladder": [{"line": 221.5, "p_over": 0.5}]}}
+    prediction_tracker.save_predictions([
+        {"game_id": "G1", "date": "2026-11-07", "home_team_abbr": "BOS", "away_team_abbr": "NYK",
+         "prob_home": 0.64, "confidence": "ORTA", "pred_margin": 5.2, "pred_total": 221.0,
+         "lines": json.dumps(ladder)},
+    ])
+    prediction_tracker.fill_results(pd.DataFrame(
+        {"game_id": ["G1"], "target": [1], "pts_home": [118], "pts_away": [109]}))
+
+    data = client.get("/api/history").json()
+    rec = data["predictions"][0]
+    assert (rec["homeScore"], rec["awayScore"], rec["fairMarginLine"]) == (118, 109, 5.5)
+    assert data["stats"]["lines"]["margin"]["mae"] == pytest.approx(3.8)   # 5.2 vs +9
+    assert data["stats"]["lines"]["total"]["bias"] == pytest.approx(-6.0)  # 221 vs 227
+
+    _write_line_metrics(tmp_path, "margin", 11.07, 11.61)
+    m = client.get("/api/model/metrics").json()
+    assert m["lines"]["margin"]["mae"] == 11.07 and m["lines"]["margin"]["bands"][0]["obs"] == 0.065
+    assert "total" not in m["lines"] and m["winSource"] == "classifier"

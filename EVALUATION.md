@@ -1,95 +1,168 @@
-# CourtVision Project Evaluation
+# CourtVision — Değerlendirme: Model ve Piyasa
 
-## Summary
-CourtVision is an impressive desktop application blending a robust machine learning pipeline with a modern React + Electron frontend. It predicts NBA game outcomes based on historical and rolling statistics using XGBoost. Because it was largely AI-generated, it serves as an excellent foundation but offers room for architectural improvements, cleaner testing practices, and better user experience scalability.
+Kasım 2026. Bu rapor modelin ne kadar iyi olduğunu ve bahis piyasasının kapanış çizgisine
+karşı ne kattığını, sızıntısız bir düzenekle ölçer. Kısa özet:
 
----
-
-## 🌟 The Positive Sides (What's Good)
-
-### 1. Solid Tech Stack Selection
-- **Frontend**: The use of **Electron, React 19, TypeScript, and Vite** is excellent for a modern, high-performance desktop application. Tailwind CSS and Recharts keep the UI styling and data visualization clean and lightweight.
-- **Backend**: **FastAPI** is a fantastic choice for a lightweight, fast, and concurrent API server to bridge the ML model with the frontend.
-- **Data Science / ML**:
-  - Using **XGBoost** paired with **Optuna** for hyperparameter tuning is a proven standard for tabular data prediction.
-  - Using `TimeSeriesSplit` for cross-validation ensures the model is not evaluated on future data (data leakage), which is critical in sports betting/predictions.
-
-### 2. Excellent Feature Engineering
-- The `feature_engineering.py` module smartly utilizes a `shift(1)` rule. This guarantees that current match stats are *not* used to predict the current match, which is a common and fatal mistake in sports prediction models.
-- Tracking **Elo ratings** (`elo_srs.py`) alongside rolling box-score statistics creates a highly expressive feature set that captures both short-term form and long-term team strength.
-- Wide-to-Tall and Tall-to-Wide format conversions are handled cleanly.
-
-### 3. Great End-to-End Workflow
-- The app isn’t just a model in a Jupyter Notebook; it handles automated data fetching (via `nba_api`), automatic preprocessing, prediction serving, and frontend display (via `05_predict_today.py`).
-- Features like injury tracking, desktop notification for watched games, and "Why wins" analysis provide genuine utility for a sports application.
+- Model, halka açık kutu skoru verileriyle **piyasanın kapanış çizgisine 0.1-0.2 sayı
+  yaklaşıyor** (fark hatası 10.96-11.07, piyasa 10.89), ama piyasanın bilmediği bir şey bilmiyor.
+- İlk ölçümde görülen avantaj (w ≈ 0.3) **geriye dönük bilgi sızıntısıydı**: eğitimde "eksik
+  oyuncu", maçın kendi kutu skorundan okunuyordu. Oyuncu bilgisi çıkarılınca w ≈ 0.
+- Toplam modeli piyasaya hiçbir şey katmıyor (w ≈ 0); tarafını oynamak %47 tuttu.
+- Uygulama bu yüzden olasılıkları **piyasa çizgisi etrafında** kurar; model ikinci görüş olarak
+  kalır ve karne canlıda ikisini kıyaslamaya devam eder.
 
 ---
 
-## 🛠️ Areas for Improvement (What Can Be Better)
+## 1. Veri ve düzenek
 
-### 1. Code Modularity and Testing (Backend)
-- **Monolithic Scripts**: Files like `05_predict_today.py`, `03_train_model.py`, and `api_server.py` contain a lot of intertwined logic (data loading, preprocessing, model prediction).
-  - *Fix*: Separate data loading from data processing. For instance, build an `nba_data_client.py` wrapper around `nba_api` to handle the data fetching, and keep the prediction scripts solely focused on orchestrating the pipeline.
-- **Lack of Automated Tests**: There are currently no unit tests (e.g., using `pytest`) to verify that the `shift(1)` logic works flawlessly or that the `api_server` routes return expected schemas.
-  - *Fix*: Add a `tests/` directory and write tests for the feature engineering and API endpoints.
+| | |
+|---|---|
+| Maçlar | 30.194 normal sezon maçı, 2001-02 → 2026-27 (nba_api) |
+| Holdout | 2025-26 (1.225 maç); Optuna aramasında hiç görülmedi |
+| Walk-forward OOF | holdout öncesi sezonlarda 5 katlı `TimeSeriesSplit` (04 ile aynı) |
+| Sonrası | 2026-27'nin ilk 138 maçı; holdout dahil eğitilmiş modelle (sezon başı) |
+| Piyasa çizgileri | 16.890 maç, 2012-13 → 2026-27, ESPN (aşağıda kaynaklar) |
 
-### 2. Frontend State Management & API Calls
-- **Raw Fetch Calls**: The React components seem to rely on direct `fetch()` calls or manual `useEffect` logic.
-  - *Fix*: Adopt a data-fetching library like **TanStack Query (React Query)**. It will handle caching, loading states, and error handling for you, reducing boilerplate in `App.tsx` and `Dashboard.tsx`.
-- **Hardcoded Configuration**: The frontend hardcodes `API_BASE = 'http://127.0.0.1:8765'`. If the port is in use, the backend might fail to start or start on a different port, breaking the UI.
-  - *Fix*: Allow the Electron main process to dynamically pass the available port to the renderer process via IPC, or handle port configuration dynamically.
+Özellikler `shift(1)` ile yalnızca önceki maçlardan üretilir; canlı yol eğitimle aynı
+pipeline'dan geçer (test: `test_live_features_match_training*`).
 
-### 3. Model Pipeline Automation & Drift Monitoring
-- **Data Updates**: The system fetches updates via `06_update_data.py`, but it requires manual running or script execution.
-  - *Fix*: You can integrate a lightweight scheduler (like `APScheduler` in Python) inside the FastAPI app to update stats in the background daily.
-- **Model Decay**: Sports meta changes over time (e.g., the rise of the 3-point shot). The `models/` directory will become stale over the season.
-  - *Fix*: Add logic to automatically evaluate model drift and prompt the user to retrain the model (or automatically retrain) when accuracy drops below a certain threshold.
+## 2. Modelin kendi başına başarısı (2025-26 holdout)
 
-### 4. Language Consistency
-- The Python backend contains Turkish comments (e.g., `Kaggle dataset ~Haziran 2023'te bitiyor.`), while the UI seems to blend Turkish and English (e.g., "Yüksek Güven" for confidence).
-- *Fix*: Standardize the language. If this is for your portfolio or monetization, English is globally preferred for variable names, docstrings, and comments, with localization/i18n support added to the frontend if needed.
-
----
-
-## 🚀 Where to Start Next?
-
-If you want to continue working on this project today, I recommend following this roadmap:
-
-1. **Refactor and Clean Up (Week 1)**
-   - Standardize all comments to English.
-   - Refactor `05_predict_today.py` to extract the `nba_api` fetching logic into a dedicated utility file.
-   - Setup a `pytest` framework and write tests for `feature_engineering.py` to ensure rolling stats calculate perfectly.
-
-2. **Enhance the Frontend (Week 2)**
-   - Implement `React Query` to replace raw `useEffect` API calls. This will immediately make the UI feel snappier and the code much cleaner.
-   - Add loading skeletons instead of simple text loading states.
-
-3. **Advanced ML Capabilities (Week 3+)**
-   - Implement Player-level features. Currently, it seems mostly team-based. Player impact models (like RAPTOR or BPM) can significantly improve the accuracy (e.g., predicting a huge drop-off if Nikola Jokic sits out).
-   - Add a scheduled background job to keep the data updated automatically without manual script execution.
----
-
-## Faz 5 — Handikap ve toplam sayı modelleri (8 Kasım 2026)
-
-Holdout: 2025-26 sezonu (1225 maç, Optuna aramasında hiç görülmedi). Üç model de 100 Optuna
-denemesiyle, 2001-02'den itibaren 30.194 maçta eğitildi.
-
-| Model | Ölçüt | Model | Taban |
+| Model | Ölçüt | Model | Basit taban |
 |---|---|---|---|
-| Kazanan | doğruluk / log-loss | %69.3 / 0.5856 | hep ev sahibi %55.4 |
-| Fark (ev − dep.) | ortalama hata (MAE) | 11.07 sayı | Elo farkından doğrusal 11.61 |
-| Toplam sayı | ortalama hata (MAE) | 15.38 sayı | iki takımın son 10 maç ortalaması 15.35 |
+| Kazanan | doğruluk / log-loss | %69.3 / 0.586 | hep ev sahibi %55.4 |
+| Fark (ev − dep.) | ortalama hata (MAE) | 11.07 sayı (×1.22 düzeltmeyle 10.96) | Elo farkı 11.61 |
+| Toplam | ortalama hata | 15.38 sayı | son-10 ortalaması 15.35 |
 
-Bulgular:
+Fark modeli tahminleri ortalamaya sıkıştırıyor (gerçek ≈ 1.2 × tahmin); hata dağılımı bu yüzden
+düzeltilmiş ortalama + ampirik şekille kuruldu, 12 aday arasından holdout CRPS'e göre seçildi.
+Toplam modeli tabanı geçemiyor: sezon içi toplam dalgalanmasının yalnızca ~%6'sı maç öncesi
+veriden açıklanabiliyor (`08_line_experiment.py`'de tempo, verim, lig trendi denendi).
 
-- **Fark modeli tabanı geçiyor**, ama tahminleri ortalamaya sıkıştırıyor (gerçek fark ≈ 1.22 ×
-  tahmin). Hata dağılımı bu yüzden düzeltilmiş ortalama + ampirik şekille kuruldu; 12 aday
-  arasından holdout CRPS'e göre seçildi. 26+ farkla biten maç oranı %8.3'ten %11.5'e çıktı
-  (gerçek %12.6), 1-5 farkla bitenler %27.3'ten %25.9'a indi (gerçek %24.5). ±8 sayılık barem
-  merdiveninde kalibrasyon hatası (ECE) %2.0.
-- **Toplam modeli tabanı geçemiyor.** Sezon içi toplam dalgalanmasının yalnızca ~%6'sı maç
-  öncesi veriden açıklanabiliyor (fark için ~%25). Hücum sayısına dayalı tempo, 100 hücum başına
-  verim, lig trendi ve tabana göre artık öğrenme denendi (`src/08_line_experiment.py`); hiçbiri
-  anlamlı kazanç getirmedi. Toplam, uygulamada "tahmin gücü düşük" etiketiyle gösteriliyor.
-- **Kazanan olasılığı** sınıflandırıcıdan geliyor: P(fark > 0) holdout log-loss'u 0.5847, fark
-  0.001 eşiğinin altında.
+*Bu tablo sızıntılı özelliklerle eğitilmiş modelin; sızıntısız sonuçlar 6. bölümde.*
+
+## 3. Piyasa ile kıyas
+
+Kapanış çizgisi (2025-26 holdout, aynı 1.224 maç):
+
+| | Piyasa | Model |
+|---|---|---|
+| Fark MAE | **10.89** | 10.96 – 11.07 |
+| Toplam MAE | **14.60** | 15.38 |
+| Kazanan log-loss / doğruluk | **0.568** / %69.2 | 0.586 / %69.3 |
+
+Piyasanın daha isabetli olması beklenen bir şey. Asıl soru modelin **ek bilgi** taşıyıp
+taşımadığı. Bunu her maç için şu regresyonla ölçtük:
+
+```
+gerçek ≈ piyasa + w · (model − piyasa)
+```
+
+- **w ≈ 0:** model, piyasanın zaten bildiğini söylüyor.
+- **w > 0:** model piyasadan ayrıldığı yönde haklı; ayrıldığı kadar değil, w kadar.
+
+w OOF'ta öğrenildi ve holdout'ta sınandı (`09_market_eval.py`). Kazananda aynı soru lojistik
+harmanla soruldu: `logit(p) = c + a·logit(piyasa) + b·logit(model)`.
+
+## 4. Bulgu: avantaj geriye dönük bilgiydi
+
+| Fark modeli | w (OOF, 15.522 maç) | w (holdout) | Modelin tarafı, holdout |
+|---|---|---|---|
+| Oyuncu eksikliği kutu skorundan (ilk ölçüm) | 0.35 ± 0.03 | 0.32 ± 0.11 | %52.9 (başabaş %52.4) |
+| Oyuncu eksikliği özellikleri yok | 0.05 ± 0.03 | −0.13 ± 0.10 | %47.6 |
+
+Kazananda harman katsayısı da aynı biçimde 0.11 ± 0.05'ten −0.01 ± 0.05'e indi.
+
+**Neden?** Eğitimde bir oyuncu "o maçta süre almadıysa" eksik sayılıyordu. Bu bilgi maçın kendi
+kutu skorundan geliyor: son dakika kadro dışı kalmaları, dinlendirme kararlarını ve en önemlisi
+**şüpheli (questionable) oyuncuların sonunda oynayıp oynamadığını** kapsıyor. Piyasa bu son
+bilgiyi bilemez; olasılığını fiyatlar. Model ise testte cevabı biliyordu.
+
+**Kanıt:** sızıntı varsa w en çok "kimsenin eksik olmadığı" maçlarda görünmeli, çünkü bunlar
+tam da "şüpheliler sonunda oynadı" maçları. Öyle çıktı:
+
+| Rotasyondan eksik oyuncu (geriye dönük) | maç | w (OOF) |
+|---|---|---|
+| hiç | 2.820 | **0.66 ± 0.07** |
+| 1 | 4.449 | 0.50 ± 0.06 |
+| 2+ | 8.253 | 0.17 ± 0.04 |
+
+**Düzeltme** (`f0440be`): eğitimde bir oyuncu ancak **bu maçta ve takımın bir önceki maçında**
+süre almadıysa eksik sayılıyor, yani maç öncesi bilinen bir yokluk. Canlıda sakatlık raporunun
+"Out/Doubtful" listesi kullanılmaya devam ediyor (gün içinde açıklanan yeni yoklukları da
+içerdiği için canlı model eğitimdeki tanımdan biraz fazlasını bilir; ölçüm temkinli kalır).
+
+**Toplam** modelinde sızıntı olsun olmasın w ≈ 0 (OOF 0.01 ± 0.03, holdout −0.15 ± 0.10); modelin
+tarafını oynamak holdout'ta %47.0 tuttu (z = −3.8). Eski "Üst (deneysel)" kuponu bu yüzden kaldırıldı.
+
+**Sezon başı:** 2026-27'nin ilk maçlarında model piyasadan ortalama 4.9 sayı ayrılıyor (sezonun
+kalanında 2.7). 8 Kasım'da görülen "model favorileri piyasadan 5-10 sayı uç görüyor" gözlemi
+bunun sonucu: az maçlık son-10 istatistikleri ve ×1.2 düzeltme farkı büyütüyor; bu farklar değer
+değil, hata.
+
+## 5. Veri kalitesi: piyasa verisinden öğrenilenler
+
+Kapanış çizgileri ESPN'in resmi olmayan API'sinden (`espn_odds.py`):
+
+- **Kaynak sezona göre değişiyor.** Maç özetindeki `pickcenter` yalnız DraftKings dönemini
+  içeriyor; Aralık 2025'e kadarki ESPN BET çizgileri ve eski sezonlar core API'de. Sezonlar:
+  2012-13 consensus (yalnız handikap), 2013-17 5Dimes, 2017-19 Caesars, 2019-24 DraftKings,
+  2024-25 ESPN BET, sonrası DraftKings.
+- **Her maçta onlarca kaynak var ve hepsinin önceliği aynı.** İlk gelen çoğu zaman bir tahmin
+  sitesiydi (numberfire, teamrankings, accuscore) ya da açılış çizgisiydi. Kaynak artık sabit bir
+  sırayla seçiliyor; yalnız tahmin sitesi olan 132 maç "çizgisiz" sayıldı.
+- **Bazı "kapanış" çizgileri maç sırasında alınmış.** Eski maçlarda her şirketin yalnız son
+  çizgisi kalmış; ~70 maçta bu canlı bir çizgi (ör. ~230'luk maçta toplam 263). Bu çizgilerde
+  sonuç çizgiye ±2 sayı yakın %22 oranında düştü (normali ~%8). Üç ve daha fazla şirket varsa,
+  medyandan 3 (handikap) / 6 (toplam) sayı sapan çizgi atlanıyor.
+- **Giriş hataları:** bir maçın toplamı 2001.0, bir diğerininki −1.0. Kareler toplamıyla çalışan
+  w hesabını tek başlarına domine ediyorlardı (toplamın OOF w'si 0.86 çıkmıştı). Aralık
+  kontrolüyle elendi.
+
+Temizlik sonrası her sezonda piyasa hatası makul aralıkta: fark 9.1-10.9, toplam 13.4-15.0 sayı
+(lig skoru arttıkça yükseliyor).
+
+## 6. Sızıntısız model
+
+⏳ *`MODEL_EGIT.bat` ve `09_market_eval.py --refresh` sonrası doldurulacak.*
+
+| | Sızıntılı | Sızıntısız |
+|---|---|---|
+| Kazanan doğruluk / log-loss (holdout) | %69.3 / 0.586 | ⏳ |
+| Fark MAE (holdout) | 11.07 | ⏳ |
+| Toplam MAE (holdout) | 15.38 | ⏳ |
+| Fark w (OOF / holdout) | 0.35 / 0.32 | ⏳ |
+| Uygulamadaki model payı (kural aşağıda) | — | ⏳ |
+
+## 7. Uygulamaya etkisi
+
+- **Piyasa merkezli olasılıklar** (`market_blend.py`): piyasa çizgisi varsa handikap merdiveni,
+  fark bantları ve toplam baremleri çizgi etrafında, piyasanın kendi hata dağılımıyla kurulur
+  (2022-25 sezonlarından; fark σ ≈ 13.4, kde şekli; toplam σ ≈ 18.0, normal; şekil holdout
+  CRPS'e göre seçilir). Merkez = piyasa + w · (model − piyasa); w yalnızca OOF ve holdout'ta
+  ikisi de 2 standart hatadan büyükse kullanılır, aksi halde 0.
+- **Model görünür kalır:** panelde piyasa ve model çizgisi yan yana; 4+ sayı ayrılıkta uyarı.
+  Kazanma çubuğu modelin, yanındaki "piyasa" yüzdesi marjsız moneyline.
+- **Kuponlar:** piyasa olasılığıyla; her maç en fazla bir kupona; iki modelin uyumu ve "güçlü
+  maç" filtreleri kalktı (aynı özelliklerle eğitilmiş iki modelin uyumu güvenilirlik kanıtı değil).
+- **Karne:** "Model ↔ Piyasa" sekmesi canlıda iki tarafın hatasını ve canlı w'yi biriktirir.
+
+## 8. Sınırlar
+
+- Canlıda 05 çizgiyi çalıştığı saatte alır; bu kapanıştan erken ve biraz daha ham. Geçmişte
+  ölçülen piyasa isabeti canlıdakinin üst sınırıdır.
+- Tarihsel sakatlık raporu yok; "maç öncesi bilinen yokluk" tanımı bir yaklaşıklık.
+- Hiperparametreler aynı katlarda arandığı için OOF sonuçları hafif iyimser; holdout temiz.
+- ESPN API'si resmi değil; biçimi değişebilir (sakatlık raporu için de aynı risk).
+
+## 9. Yeniden üretmek
+
+```powershell
+python src/espn_odds.py --backfill --season 2012-13 2013-14 ... 2026-27   # önbellekli, devam edebilir
+.\MODEL_EGIT.bat                                   # 02 → 03 (100 deneme) → 04
+python src/09_market_eval.py --refresh             # model ↔ piyasa, models/market_distribution.json
+python src/09_market_eval.py --no-availability     # oyuncu özellikleri olmadan (alt sınır)
+```
+
+Raporlar: `reports/market_eval.json`, `reports/market_eval_noavail.json`; sızıntılı ilk ölçüm
+`reports/market_eval_leaky.json` olarak saklandı.

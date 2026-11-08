@@ -1,93 +1,126 @@
-# CourtVision — NBA AI Prediction System
+# CourtVision — NBA Game Prediction & Market Analysis
 
-A machine learning-powered desktop app for predicting NBA game outcomes. The XGBoost model is trained on 26,000+ games spanning the 2000–2026 seasons.
+A personal desktop app (Electron + FastAPI) that predicts NBA games with XGBoost models
+trained on 30,000+ regular-season games (2001–2026), turns those predictions into full score
+distributions, and measures itself honestly against the betting market's closing lines.
+
+It is a hobby and learning project, not a betting tool. Its most interesting result is a
+negative one: a good model built from public box-score data gets within ~0.1–0.2 points of the
+closing line, but adds no information the market does not already have. The apparent edge it
+first showed came from a hindsight leak, found and fixed with 16,900 historical closing lines.
+See [EVALUATION.md](EVALUATION.md).
 
 ## Features
 
-- **Daily predictions** — Win/loss probabilities automatically computed each morning for today's games.
-- **Why wins analysis** — Key factors based on recent form, fatigue, head-to-head history, and stat differentials.
-- **Advanced Predictive Stats** — Calculates advanced modeling statistics such as Elo, True Shooting %, and Oliver's Four Factors of Basketball Success (eFG%, TOV%, ORB%, FTr).
-- **Team detail modal** — Last 15 games trend chart, rolling Pts / Opp / FG% stats.
-- **Injury tracking** — Out and Doubtful players surfaced automatically per game.
-- **Game notifications** — Desktop alert 30 minutes before tip-off for watched games.
-- **Prediction history** — Accuracy tracking broken down by confidence tier.
-- **Model metrics** — Robust model evaluation including Accuracy, AUC-ROC, Log-Loss, and Brier Score tracking.
+- **Daily predictions** — win probability, expected margin and total for every game, refreshed
+  through the day with the injury report.
+- **Score distributions** — each prediction becomes a calibrated distribution over integer
+  scores, so any handicap or over/under line, winning-margin band and team score range gets a
+  probability.
+- **Market lines** — DraftKings handicap, total and moneyline via ESPN on every run, plus
+  16,900 historical closing lines (2012-13 onward) for evaluation.
+- **Market-centred pricing** — when a line exists, probabilities are built around it with the
+  market's own error distribution; the model's view is shown next to it.
+- **Coupons and report card** — probability-tier handicap coupons (one game per coupon) and a
+  calibration report card ("when we said 70%, how often did it happen?", Wilson intervals),
+  including a live model-vs-market comparison.
+- **Explanations** — SHAP contributions grouped into readable factors (form, Elo, rest,
+  missing players…), team pages, prediction history.
 
-## Model Performance
+## Results (2025-26 holdout, 1,225 games never seen in tuning)
 
-| Metric | Value |
-|--------|-------|
-| Accuracy (OOF) | **66.7%** |
-| AUC-ROC | **0.715** |
-| Log-Loss | **0.608** |
-| Brier Score | **0.210** |
-| Baseline (always pick home) | 57.9% |
-| Features | 244 (including Four Factors) |
-| Training data | 26,332 games (2000–2026) |
-| Method | XGBoost + Optuna (150 trials) + 5-Fold TimeSeriesSplit |
+| | Model | Simple baseline | Market (closing line) |
+|---|---|---|---|
+| Winner accuracy / log-loss | 69.3% / 0.586 ⏳ | 55.4% (always home) | 69.2% / 0.568 |
+| Margin MAE (points) | 11.07 ⏳ | 11.61 (Elo) | **10.89** |
+| Total MAE (points) | 15.38 ⏳ | 15.35 (last-10 average) | **14.60** |
+
+⏳ Pre-fix numbers: they include the hindsight leak described in EVALUATION.md and will be
+replaced after the leak-free retrain.
+
+Does the model add anything to the market? In `actual ≈ market + w·(model − market)`, the
+weight was **w ≈ 0.3** with the leaky player-availability features and **w ≈ 0** without
+them — the model's whole edge was hindsight. Details, data-quality lessons and the
+leak-free result: [EVALUATION.md](EVALUATION.md).
 
 ## Tech Stack
 
-**Backend:** Python · FastAPI · XGBoost · Optuna · nba_api · pandas
-**Frontend:** Electron · React 19 · TypeScript · Tailwind CSS · Recharts
+**Backend:** Python · FastAPI · XGBoost · Optuna · nba_api · pandas · SciPy
+**Frontend:** Electron · React 19 · TypeScript · Tailwind CSS · TanStack Query · Recharts
+**Data:** nba_api (games, box scores) · ESPN (injury report, betting lines)
 
 ## Setup
 
 ### Requirements
-- Python 3.10+
+- Python 3.11 (virtual environment in `.venv`)
 - Node.js 18+
+- An NVIDIA GPU is used for training (`device: cuda`); inference runs on the CPU.
 
-### 1. Install Python dependencies
+### 1. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+cd electron-app && npm install
 ```
 
-### 2. Build the dataset (first-time setup)
+### 2. Build the data and models (first time)
 
 ```bash
-python src/06_update_data.py --seasons 2023-24 2024-25 2025-26
+python src/06_update_data.py --seasons 2024-25 2025-26 2026-27   # missing seasons via nba_api
 python src/01_build_master.py
 python src/02_build_features.py
-python src/03_train_model.py
+python src/03_train_model.py --task all --trials 100            # win, margin, total (~75 min)
+python src/04_evaluate_model.py                                 # holdout, calibration, distributions
+python src/espn_odds.py --backfill --season 2012-13 ... 2026-27  # closing lines (resumable)
+python src/09_market_eval.py --refresh                          # model vs market, market distribution
 ```
 
-### 3. Run in development
+On Windows `MODEL_EGIT.bat` runs steps 02–04 in one go.
+
+### 3. Run
 
 ```bash
 cd electron-app
-npm install
-npm run dev
+npm run dev        # or double-click CourtVision.bat
 ```
 
-The app automatically starts the FastAPI server on launch. On first run, you will be prompted to select the project root folder.
+The app starts the FastAPI server (port 8765) itself and runs the daily prediction script.
 
-### 4. Build installer (Windows)
+### 4. Tests
 
 ```bash
-cd electron-app
-npm run build:win
+.venv\Scripts\python -m pytest tests -q
+cd electron-app && npm run typecheck
 ```
-
-Produces `dist/CourtVision-1.0.0-setup.exe`.
 
 ## Project Structure
 
 ```text
 ├── src/
-│   ├── 01_build_master.py       # Merge raw data sources
-│   ├── 02_build_features.py     # Rolling feature engineering
-│   ├── 03_train_model.py        # XGBoost + Optuna training
-│   ├── 04_evaluate_model.py     # OOF metrics & reports
-│   ├── 05_predict_today.py      # Daily prediction pipeline
-│   ├── 06_update_data.py        # Fetch missing seasons via nba_api
-│   ├── feature_engineering.py   # Shared rolling feature module
-│   ├── prediction_tracker.py    # Prediction log & result filling
+│   ├── 01_build_master.py       # Merge game logs into one row per game
+│   ├── 02_build_features.py     # Leak-free rolling features (shift(1) everywhere)
+│   ├── 03_train_model.py        # XGBoost + Optuna, per task (win / margin / total)
+│   ├── 04_evaluate_model.py     # Walk-forward OOF + holdout, error distributions
+│   ├── 05_predict_today.py      # Daily pipeline: schedule, injuries, market lines, predictions, coupons
+│   ├── 06_update_data.py        # Fetch seasons via nba_api
+│   ├── 07_experiment.py         # Feature-group ablation on the holdout
+│   ├── 08_line_experiment.py    # Margin / total model experiments
+│   ├── 09_market_eval.py        # Model vs closing lines; writes the market distribution
+│   ├── feature_engineering.py   # Shared feature pipeline (training and live)
+│   ├── score_dist.py            # Prediction → integer score distribution → line probabilities
+│   ├── espn_odds.py             # ESPN / DraftKings lines: today + resumable backfill
+│   ├── market_eval.py           # Blend weight, ATS record, market error distribution
+│   ├── market_blend.py          # Market-centred lines for the app
+│   ├── coupons.py, coupon_tracker.py, report_card.py
+│   ├── prediction_tracker.py    # Prediction log, results, live error stats
 │   └── api_server.py            # FastAPI server
+├── tests/                       # pytest suite
 ├── electron-app/                # Electron + React frontend
 ├── data/                        # Data files (gitignored)
 ├── models/                      # Trained model artifacts (gitignored)
-└── requirements.txt
+├── EVALUATION.md                # Model vs market evaluation report
+└── GUNLUK_KULLANIM.md           # Daily usage guide (Turkish)
 ```
 
 ## License

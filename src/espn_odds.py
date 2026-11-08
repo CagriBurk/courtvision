@@ -26,10 +26,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import random
 import re
+import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -339,19 +343,63 @@ def load_market_lines(path: Path = LINES_PATH) -> pd.DataFrame:
     return df
 
 
+@contextmanager
+def _file_lock(path: Path, timeout: float = 120.0, stale: float = 300.0):
+    """
+    Cross-process lock next to `path`, so several backfill terminals (and 05)
+    can update the same table without one overwriting the other's rows.
+    """
+    lock = path.with_name(path.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > stale:   # holder crashed
+                    lock.unlink(missing_ok=True)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Kilit alınamadı: {lock}")
+            time.sleep(0.05 + random.random() * 0.1)
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """os.replace with retries: on Windows a reader holding `dst` blocks it briefly."""
+    for attempt in range(20):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.1)
+
+
 def upsert_lines(rows: list[dict], path: Path = LINES_PATH) -> pd.DataFrame:
     """Insert/replace rows by game_id; returns the stored table."""
-    existing = load_market_lines(path)
     if not rows:
-        return existing
+        return load_market_lines(path)
     new = pd.DataFrame(rows).reindex(columns=COLUMNS)
     new["game_id"] = new["game_id"].astype(str)
-    keep = existing[~existing["game_id"].isin(new["game_id"])]
-    out = pd.concat([keep, new], ignore_index=True) if len(keep) else new
-    out["game_date"] = pd.to_datetime(out["game_date"])
-    out = out.sort_values(["game_date", "game_id"]).reset_index(drop=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(path, index=False)
+    with _file_lock(path):
+        existing = load_market_lines(path)
+        keep = existing[~existing["game_id"].isin(new["game_id"])]
+        out = pd.concat([keep, new], ignore_index=True) if len(keep) else new
+        out["game_date"] = pd.to_datetime(out["game_date"])
+        out = out.sort_values(["game_date", "game_id"]).reset_index(drop=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        out.to_parquet(tmp, index=False)
+        _replace(tmp, path)
     return out
 
 

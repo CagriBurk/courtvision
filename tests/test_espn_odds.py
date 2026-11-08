@@ -191,6 +191,23 @@ def test_upsert_replaces_by_game_id(tmp_path):
     assert upsert_lines([], path).shape[0] == 2
 
 
+def test_concurrent_upserts_keep_every_row(tmp_path):
+    # Several backfill terminals write the same table at once
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "lines.parquet"
+
+    def writer(w):
+        for i in range(8):
+            upsert_lines([{"game_id": f"{w}-{i}", "game_date": pd.Timestamp("2026-01-01"),
+                           "spread_home": float(i)}], path)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(writer, range(4)))
+    assert len(load_market_lines(path)) == 32
+    assert not list(tmp_path.glob("*.lock")) and not list(tmp_path.glob("*.tmp"))
+
+
 def test_update_today_lines_keeps_pregame_line(tmp_path, monkeypatch):
     path = tmp_path / "lines.parquet"
     day = date(2026, 11, 8)

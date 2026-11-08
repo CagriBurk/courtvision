@@ -95,7 +95,14 @@ export interface GameLines {
   } | null
 }
 
-export type NavPage = 'dashboard' | 'history' | 'metrics' | 'guide' | 'settings'
+export type NavPage =
+  | 'dashboard'
+  | 'coupons'
+  | 'reportCard'
+  | 'history'
+  | 'metrics'
+  | 'guide'
+  | 'settings'
 
 export interface PredictionRecord {
   gameId: string
@@ -130,4 +137,109 @@ export interface ModelHealth {
   brierScore: number
   lastTuning: string
   recentPredictions: { correct: number; total: number }
+}
+
+// ---------------------------------------------------------------------------
+// Kuponlar ve karne (Faz 6)
+// ---------------------------------------------------------------------------
+export interface CouponLeg {
+  gameId: string
+  home: string
+  away: string
+  team: string // seçilen (favori) takım
+  side: 'home' | 'away'
+  line: number // ev farkı çizgisi
+  handicap: number
+  label: string // "LAL -4.5"
+  p: number
+  fairOdds: number
+  minOdds: number
+  gameTimeUtc?: string | null
+  won?: boolean | null
+  score?: [number, number] | null
+}
+
+export interface Coupon {
+  id: string
+  date: string
+  tier: 'guvenli' | 'dengeli' | 'riskli'
+  label: string
+  target: number
+  legs: CouponLeg[]
+  p: number
+  fairOdds: number
+  minOdds: number
+  locked: boolean
+  playedOdds: number | null
+  result: 'won' | 'lost' | null
+}
+
+export interface CouponGame {
+  gameId: string
+  home: string
+  away: string
+  favourite: string
+  center: number
+  pClassifier: number
+  pMargin: number
+  gap: number
+  eligible: boolean
+  strong: boolean
+  reasons: string[]
+  gameTimeUtc?: string | null
+}
+
+export interface CouponsToday {
+  date: string | null
+  nLegs: number
+  note: string | null
+  games: CouponGame[]
+  coupons: Coupon[]
+}
+
+export interface CalibrationRow {
+  lo: number
+  hi: number
+  n: number
+  meanPred: number
+  hitRate: number
+  ciLo: number
+  ciHi: number
+}
+
+export interface Calibration {
+  n: number
+  rows: CalibrationRow[]
+  meanPred: number | null
+  hitRate: number | null
+}
+
+export interface CouponTierStats {
+  tier: Coupon['tier']
+  label: string
+  n: number
+  won: number
+  hitRate: number | null
+  expected: number | null
+  legs: Calibration
+  nPlayed: number
+  profit: number | null
+  roi: number | null
+}
+
+export interface ReportCard {
+  side: Calibration
+  handicap: {
+    calibration: Calibration
+    bands: { side: 'home' | 'away'; lo: number; hi: number | null; n: number; pred: number; obs: number }[]
+    error: LineStats | null
+  }
+  total: { calibration: Calibration; error: LineStats | null }
+  coupons: {
+    n: number
+    pending: number
+    tiers: CouponTierStats[]
+    played: { n: number; won: number; profit: number | null; roi: number | null }
+  }
+  recentCoupons: Coupon[]
 }

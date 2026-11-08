@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { LayoutDashboard, History, BarChart2, BookOpen, Settings } from 'lucide-react'
+import {
+  LayoutDashboard,
+  Ticket,
+  ClipboardCheck,
+  History,
+  BarChart2,
+  BookOpen,
+  Settings
+} from 'lucide-react'
 import { NavPage } from '../types'
 import { useModelMetrics } from '../hooks/useModelMetrics'
 
@@ -12,6 +20,8 @@ const NBA_LOGO = 'https://cdn.nba.com/logos/leagues/logo-nba.svg'
 
 const navItems = [
   { page: 'dashboard' as NavPage, label: 'Dashboard', icon: LayoutDashboard },
+  { page: 'coupons' as NavPage, label: 'Kuponlar', icon: Ticket },
+  { page: 'reportCard' as NavPage, label: 'Karne', icon: ClipboardCheck },
   { page: 'history' as NavPage, label: 'Geçmiş', icon: History },
   { page: 'metrics' as NavPage, label: 'Model Metrikleri', icon: BarChart2 },
   { page: 'guide' as NavPage, label: 'Nasıl Kullanılır', icon: BookOpen },

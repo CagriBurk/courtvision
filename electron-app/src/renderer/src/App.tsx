@@ -6,6 +6,8 @@ import History from './pages/History'
 import ModelMetrics from './pages/ModelMetrics'
 import Settings from './pages/Settings'
 import Guide from './pages/Guide'
+import Coupons from './pages/Coupons'
+import ReportCard from './pages/ReportCard'
 import WhyWinsPanel from './components/WhyWinsPanel'
 import ModelHealthPanel from './components/ModelHealthPanel'
 import TeamDetailModal from './components/TeamDetailModal'
@@ -61,6 +63,8 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (wasUpdating.current && !updating) {
       queryClient.invalidateQueries({ queryKey: ['history'] })
+      queryClient.invalidateQueries({ queryKey: ['coupons'] })
+      queryClient.invalidateQueries({ queryKey: ['reportCard'] })
     }
     wasUpdating.current = updating
   }, [updating, queryClient])
@@ -175,6 +179,8 @@ export default function App(): React.JSX.Element {
             onToggleWatch={toggleWatch}
           />
         )}
+        {page === 'coupons' && <Coupons apiBase={API_BASE} />}
+        {page === 'reportCard' && <ReportCard apiBase={API_BASE} />}
         {page === 'history' && <History apiBase={API_BASE} />}
         {page === 'metrics' && <ModelMetrics apiBase={API_BASE} />}
         {page === 'guide' && <Guide />}

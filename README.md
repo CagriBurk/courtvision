@@ -11,6 +11,10 @@ have. The apparent edge it first showed came from a hindsight leak, found and fi
 historical closing lines.
 See [EVALUATION.md](EVALUATION.md).
 
+![Daily predictions with market lines and score distributions](docs/img/dashboard.png)
+
+![Model metrics on the 2025-26 holdout](docs/img/metrics.png)
+
 ## Features
 
 - **Daily predictions** — win probability, expected margin and total for every game, refreshed

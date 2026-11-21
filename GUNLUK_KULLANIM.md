@@ -21,14 +21,14 @@ sağ tık → *Gönder → Masaüstü (kısayol oluştur)* ile masaüstüne kıs
 **Terminalden:**
 
 ```powershell
-cd C:\Users\cbura\Desktop\courtvision\electron-app
+cd C:\path\to\courtvision\electron-app
 npm run dev
 ```
 
 - Venv'i ayrıca etkinleştirmen gerekmez: Electron, API'yi projedeki `.venv` Python'u ile kendisi başlatır.
 - Açılan **siyah pencereyi kapatma.** API ve tahmin logları orada `[uvicorn]` önekiyle görünür.
 - Uygulama penceresini kapatınca API de kapanır. Zamanlayıcı yalnızca uygulama açıkken çalışır.
-- İlk açılışta proje klasörü sorulursa `C:\Users\cbura\Desktop\courtvision` klasörünü seç.
+- İlk açılışta proje klasörü sorulursa `C:\path\to\courtvision` klasörünü seç.
 
 ---
 
@@ -114,7 +114,7 @@ Handikap/toplam: margin, total | Kazanan olasılığı: sınıflandırıcı   �
 Haftada bir, uygulama kapalıyken ya da açıkken:
 
 ```powershell
-cd C:\Users\cbura\Desktop\courtvision
+cd C:\path\to\courtvision
 .\.venv\Scripts\Activate.ps1
 python src/prediction_tracker.py
 ```
@@ -267,7 +267,7 @@ oranlarından marjı çıkarılmış olasılık. Neden ikisi ayrı: bkz. `EVALUA
 Elle çalıştırmak istersen aynı adımlar:
 
 ```powershell
-cd C:\Users\cbura\Desktop\courtvision
+cd C:\path\to\courtvision
 .\.venv\Scripts\Activate.ps1
 python src/02_build_features.py
 python src/03_train_model.py --task all --trials 100

@@ -33,3 +33,8 @@ electron-app/dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# ── Yerel çalışma notları ve asistan ayarları ────────────────────────────────
+.claude/
+CLAUDE.md
+DEVIR_*.md
